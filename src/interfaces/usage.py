@@ -4,6 +4,7 @@ from pydantic import BaseModel
 class UserContext(BaseModel):
     key: str
     model_name: str
+    endpoint: str
 
 
 class Usage(BaseModel):

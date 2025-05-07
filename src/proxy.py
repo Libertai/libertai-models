@@ -58,7 +58,7 @@ async def process_response(
             try:
                 if background_tasks:
                     usage_data = UsageFullData(
-                        **user_context.model_dump(), **extract_usage_info(response_json).model_dump()
+                        **user_context.model_dump(), **extract_usage_info(response_json, user_context).model_dump()
                     )
 
                     background_tasks.add_task(report_usage_event_task, usage_data)
@@ -84,20 +84,30 @@ async def process_response(
     )
 
 
-def extract_usage_info(response_json: dict[str, Any]) -> Usage:
+def extract_usage_info(data: dict[str, Any], context: UserContext) -> Usage:
     """
     Extract token cached and predicted counts from JSON response.
 
     Args:
-        response_json: The JSON response from the server
+        data: The JSON response from the server
+        context: The user context
     """
 
-    usage: dict = response_json.get("usage", {})
-    return Usage(
-        input_tokens=int(usage.get("prompt_tokens", 0)),
-        output_tokens=int(usage.get("completion_tokens", 0)),
-        cached_tokens=0,
-    )
+    if context.endpoint in ["v1/chat/completions", "v1/completions"]:
+        usage: dict = data.get("usage", {})
+        return Usage(
+            input_tokens=int(usage.get("prompt_tokens", 0)),
+            output_tokens=int(usage.get("completion_tokens", 0)),
+            cached_tokens=0,
+        )
+    elif context.endpoint == "completions":
+        return Usage(
+            input_tokens=int(data.get("tokens_evaluated", 0)),
+            output_tokens=int(data.get("tokens_predicted", 0)),
+            cached_tokens=0,
+        )
+    else:
+        raise ValueError("Can't extract usage metrics")
 
 
 @router.post("/{full_path:path}")
@@ -118,7 +128,7 @@ async def proxy_request(
     # Get model from request
     model_name = proxy_request_data.model
 
-    user_context = UserContext(key=token, model_name=model_name)
+    user_context = UserContext(key=token, model_name=model_name, endpoint=full_path)
 
     # Get the original request body
     body = await request.json()

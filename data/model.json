@@ -2,7 +2,8 @@
   "id": "hermes-3-8b-tee",
   "url": "http://localhost:8001",
   "completion_paths": [
-    "/v1/completions",
-    "/v1/chat/completions"
+    "v1/completions",
+    "v1/chat/completions",
+    "completions"
   ]
 }
