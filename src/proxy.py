@@ -143,7 +143,7 @@ async def proxy_request(
                 method=request.method,
                 url=url,
                 json=body,
-                timeout=aiohttp.ClientTimeout(total=30),
+                timeout=aiohttp.ClientTimeout(total=300),
             ) as response:
                 # Process and return the response
                 return await process_response(response, user_context, background_tasks)
