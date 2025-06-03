@@ -10,7 +10,7 @@ async def report_usage_event_task(usage: UsageFullData):
         async with aiohttp.ClientSession() as session:
             session.headers["x-admin-token"] = config.BACKEND_SECRET_TOKEN
             path = "api-keys/admin/usage"
-            async with session.post(f"{config.BACKEND_API_URL}/{path}", json=usage.model_dump_json()) as response:
+            async with session.post(f"{config.BACKEND_API_URL}/{path}", json=usage.model_dump()) as response:
                 if response.status != 200:
                     print(f"Error reporting usage: {response.status}")
 
