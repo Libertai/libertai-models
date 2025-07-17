@@ -17,6 +17,8 @@ router = APIRouter(tags=["Proxy service"])
 keys_manager = KeysManager()
 security = HTTPBearer()
 
+timeout = httpx.Timeout(timeout=600.0)  # 10 minutes
+
 
 class ProxyRequest(BaseModel):
     model: str
@@ -125,7 +127,7 @@ async def proxy_request(
     headers.pop("host", None)
 
     # Forward the request
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=timeout) as client:
         try:
             # Forward the request to the selected server
             url = f"{config.MODEL_CONFIG.url}/{full_path}"
