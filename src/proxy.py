@@ -1,27 +1,23 @@
+import json
 from http import HTTPStatus
-from typing import Annotated, Any, Union
+from typing import Annotated, Union
 
-import aiohttp
-from fastapi import (
-    APIRouter,
-    BackgroundTasks,
-    Depends,
-    HTTPException,
-    Request,
-    Response,
-)
+import httpx
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
 from src.api_keys import KeysManager
 from src.config import config
-from src.interfaces.usage import UserContext, UsageFullData, Usage
-from src.tasks import report_usage_event_task
+from src.interfaces.usage import UserContext, UsageFullData
+from src.usage import report_usage_event_task, extract_usage_info_from_raw, extract_usage_info
 
 router = APIRouter(tags=["Proxy service"])
 keys_manager = KeysManager()
 security = HTTPBearer()
+
+timeout = httpx.Timeout(timeout=600.0)  # 10 minutes
 
 
 class ProxyRequest(BaseModel):
@@ -33,7 +29,7 @@ class ProxyRequest(BaseModel):
 
 
 async def process_response(
-    response: aiohttp.ClientResponse, user_context: UserContext, background_tasks: BackgroundTasks
+    response: httpx.Response, user_context: UserContext, background_tasks: BackgroundTasks
 ) -> Union[Response, StreamingResponse]:
     """
     Process the response from the upstream server and extract token information.
@@ -52,62 +48,55 @@ async def process_response(
     if "application/json" in content_type:
         try:
             # Get response JSON to extract token counts
-            response_json = await response.json()
+            response_bytes = response.content
+            response_json = json.loads(response_bytes)
 
-            # Extract usage information
-            try:
-                if background_tasks:
+            # Extract usage info and queue background task
+            if background_tasks:
+                try:
                     usage_data = UsageFullData(
-                        **user_context.model_dump(), **extract_usage_info(response_json, user_context).model_dump()
+                        **user_context.model_dump(),
+                        **extract_usage_info(response_json, user_context).model_dump(),
                     )
-
                     background_tasks.add_task(report_usage_event_task, usage_data)
-            except Exception as e:
-                print(f"Exception occurred during usage report {str(e)}")
+                except Exception as e:
+                    print(f"Exception occurred during usage report {str(e)}")
 
-            # Return processed JSON response
             return Response(
-                content=await response.read(),
-                status_code=response.status,
-                headers=response.headers,
+                content=response_bytes,
+                status_code=response.status_code,
+                headers=dict(response.headers),
                 media_type=content_type,
             )
-        except Exception:
-            # If JSON parsing fails, fall back to streaming
-            pass
 
-    # For non-JSON responses, use streaming
-    return StreamingResponse(
-        content=response.content.iter_any(),
-        status_code=response.status,
-        headers=dict(response.headers),
-    )
+        except Exception as e:
+            print(f"Failed to parse JSON response: {e}")
 
+    # All other (streaming or binary) responses
+    try:
+        # Read full content for usage extraction
+        response_bytes = response.content
 
-def extract_usage_info(data: dict[str, Any], context: UserContext) -> Usage:
-    """
-    Extract token cached and predicted counts from JSON response.
+        if background_tasks:
+            try:
+                usage_data = UsageFullData(
+                    **user_context.model_dump(),
+                    **extract_usage_info_from_raw(response_bytes, user_context).model_dump(),
+                )
+                background_tasks.add_task(report_usage_event_task, usage_data)
+            except Exception as e:
+                print(f"Streaming usage extraction failed: {e}")
 
-    Args:
-        data: The JSON response from the server
-        context: The user context
-    """
-
-    if context.endpoint in ["v1/chat/completions", "v1/completions"]:
-        usage: dict = data.get("usage", {})
-        return Usage(
-            input_tokens=int(usage.get("prompt_tokens", 0)),
-            output_tokens=int(usage.get("completion_tokens", 0)),
-            cached_tokens=0,
+        return Response(
+            content=response_bytes,
+            status_code=response.status_code,
+            headers=dict(response.headers),
+            media_type=content_type,
         )
-    elif context.endpoint == "completions":
-        return Usage(
-            input_tokens=int(data.get("tokens_evaluated", 0)),
-            output_tokens=int(data.get("tokens_predicted", 0)),
-            cached_tokens=0,
-        )
-    else:
-        raise ValueError("Can't extract usage metrics")
+
+    except Exception as e:
+        print(f"Unhandled response type: {e}")
+        return Response(status_code=500, content="Error handling upstream response")
 
 
 @router.post("/{full_path:path}")
@@ -130,23 +119,24 @@ async def proxy_request(
 
     user_context = UserContext(key=token, model_name=model_name, endpoint=full_path)
 
-    # Get the original request body
-    body = await request.json()
+    # Get the original request body & headers
+    headers = dict(request.headers)
+    body = await request.body()
 
-    # Forward the request to the selected server
-    async with aiohttp.ClientSession() as session:
+    # Clean up headers
+    headers.pop("host", None)
+
+    # Forward the request
+    async with httpx.AsyncClient(timeout=timeout) as client:
         try:
             # Forward the request to the selected server
             url = f"{config.MODEL_CONFIG.url}/{full_path}"
 
-            async with session.request(
-                method=request.method,
-                url=url,
-                json=body,
-                timeout=aiohttp.ClientTimeout(total=600),
-            ) as response:
-                # Process and return the response
-                return await process_response(response, user_context, background_tasks)
+            response: httpx.Response = await client.post(
+                url, content=body, headers=headers, params=request.query_params
+            )
         except Exception as e:
             print("error", e)
             raise HTTPException(status_code=500, detail=f"Error forwarding request: {str(e)}")
+
+    return await process_response(response, user_context, background_tasks)
