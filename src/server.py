@@ -2,9 +2,11 @@ import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from src.api_keys import KeysManager
-from src.proxy import router as proxy_router
 from starlette.middleware.cors import CORSMiddleware
+
+from src.api_keys import KeysManager
+from src.api_keys import router as libertai_router
+from src.proxy import router as proxy_router
 
 keys_manager = KeysManager()
 
@@ -32,4 +34,5 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(libertai_router)
 app.include_router(proxy_router)
