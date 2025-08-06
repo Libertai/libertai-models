@@ -2,7 +2,7 @@ import json
 import re
 from typing import Any
 
-import aiohttp
+import httpx
 
 from src.config import config
 from src.interfaces.usage import UsageFullData, UserContext, Usage
@@ -11,11 +11,12 @@ from src.interfaces.usage import UsageFullData, UserContext, Usage
 async def report_usage_event_task(usage: UsageFullData):
     print(f"Collecting usage {usage}")
     try:
-        async with aiohttp.ClientSession() as session:
+        timeout = httpx.Timeout(timeout=30.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
             path = "api-keys/admin/usage"
-            async with session.post(f"{config.BACKEND_URL}/{path}", json=usage.model_dump()) as response:
-                if response.status != 200:
-                    print(f"Error reporting usage: {response.status}")
+            response = await client.post(f"{config.BACKEND_URL}/{path}", json=usage.model_dump())
+            if response.status_code != 200:
+                print(f"Error reporting usage: {response.status_code}")
 
     except Exception as e:
         print(f"Exception occurred during usage report {str(e)}")
