@@ -12,15 +12,15 @@ class ModelConfig(BaseModel):
 
 
 class _Config:
-    BACKEND_API_URL: str
-    BACKEND_SECRET_TOKEN: str
+    BACKEND_URL: str
     MODEL_CONFIG: ModelConfig
+    API_PUBLIC_KEY: str
 
     def __init__(self):
         load_dotenv()
 
-        self.BACKEND_API_URL = os.getenv("BACKEND_API_URL")
-        self.BACKEND_SECRET_TOKEN = os.getenv("BACKEND_SECRET_TOKEN")
+        self.BACKEND_URL = os.getenv("BACKEND_URL")
+        self.API_PUBLIC_KEY = os.getenv("API_PUBLIC_KEY")
 
         # Load model configuration from environment variable or file
         model_config = os.getenv("MODEL_CONFIG")

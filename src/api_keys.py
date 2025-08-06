@@ -1,28 +1,8 @@
-import aiohttp
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 from src.config import config
-
-
-async def get_active_keys() -> set:
-    keys = set()
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            session.headers["x-admin-token"] = config.BACKEND_SECRET_TOKEN
-            path = "api-keys/admin/list"
-            async with session.get(f"{config.BACKEND_API_URL}/{path}") as response:
-                if response.status == 200:
-                    data = await response.json()
-                    keys.update(data.get("keys"))
-                else:
-                    print(f"Error fetching accounts: {response.status}")
-                    return keys
-
-    except Exception as e:
-        print(f"Exception fetching accounts {str(e)}")
-        return keys
-
-    return keys
+from src.cryptography import verify_signed_payload
 
 
 class KeysManager:
@@ -43,5 +23,32 @@ class KeysManager:
     def key_exists(self, key):
         return key in self.keys
 
-    async def refresh_keys(self):
-        self.keys = await get_active_keys()
+
+router = APIRouter(tags=["LibertAI"], prefix="/libertai")
+
+
+class EncryptedApiKeysPayload(BaseModel):
+    encrypted_payload: dict[str, str]
+
+
+@router.post("/api-keys")
+async def receive_api_keys(payload: EncryptedApiKeysPayload):
+    """
+    Endpoint for receiving encrypted API keys from the backend.
+    The backend will call this endpoint with encrypted/signed keys.
+    """
+    try:
+        # Verify and decrypt the payload using the public key
+        decrypted_data = verify_signed_payload(payload.encrypted_payload, config.API_PUBLIC_KEY)
+
+        # Extract the keys from the decrypted data
+        keys = decrypted_data.get("keys", [])
+
+        # Update the KeysManager with the new keys
+        keys_manager = KeysManager()
+        keys_manager.add_keys(set(keys))
+
+        return {"status": "success", "keys_received": len(keys)}
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error processing encrypted keys: {str(e)}")
