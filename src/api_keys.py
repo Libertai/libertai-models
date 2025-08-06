@@ -39,7 +39,7 @@ async def receive_api_keys(payload: EncryptedApiKeysPayload):
     """
     try:
         # Verify and decrypt the payload using the public key
-        decrypted_data = verify_signed_payload(payload.encrypted_payload, config.BACKEND_PUBLIC_KEY)
+        decrypted_data = verify_signed_payload(payload.encrypted_payload, config.API_PUBLIC_KEY)
 
         # Extract the keys from the decrypted data
         keys = decrypted_data.get("keys", [])
