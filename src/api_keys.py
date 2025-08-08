@@ -7,15 +7,12 @@ from src.cryptography import verify_signed_payload
 
 class KeysManager:
     _instance = None
+    keys: set[str] = set()
 
     def __new__(cls, *args, **kwargs):
         if not cls._instance:
             cls._instance = super(KeysManager, cls).__new__(cls, *args, **kwargs)
         return cls._instance
-
-    def __init__(self):
-        if not hasattr(self, "initialized"):  # Check if already initialized
-            self.keys = set()
 
     def add_keys(self, keys):
         self.keys.update(keys)
