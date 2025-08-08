@@ -99,6 +99,30 @@ async def process_response(
         return Response(status_code=500, content="Error handling upstream response")
 
 
+@router.get("/metrics")
+async def proxy_metrics(request: Request):
+    url = f"{config.MODEL_CONFIG.url}/metrics"
+
+    # Get the original request headers
+    headers = dict(request.headers)
+    headers.pop("host", None)
+
+    # Forward the GET request to the upstream server
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        try:
+            response: httpx.Response = await client.get(url, headers=headers, params=request.query_params)
+        except Exception as e:
+            print("error", e)
+            raise HTTPException(status_code=500, detail=f"Error forwarding request: {str(e)}")
+
+    return Response(
+        content=response.content,
+        status_code=response.status_code,
+        headers=dict(response.headers),
+        media_type=response.headers.get("Content-Type", ""),
+    )
+
+
 @router.post("/{full_path:path}")
 async def proxy_request(
     full_path: str,
