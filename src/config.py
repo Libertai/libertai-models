@@ -8,7 +8,7 @@ from pydantic import BaseModel
 class ModelConfig(BaseModel):
     id: str
     url: str
-    completion_paths: list[str]
+    allowed_paths: list[str]
 
 
 class _Config:

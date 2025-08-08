@@ -111,7 +111,7 @@ async def proxy_request(
     if not keys_manager.key_exists(token):
         return HTTPException(status_code=HTTPStatus.UNAUTHORIZED, detail="Invalid API key")
 
-    if full_path not in config.MODEL_CONFIG.completion_paths:
+    if full_path not in config.MODEL_CONFIG.allowed_paths:
         return HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Invalid inference path")
 
     # Get model from request
