@@ -1,6 +1,6 @@
 import json
 from http import HTTPStatus
-from typing import Annotated, Union
+from typing import Annotated
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
@@ -22,81 +22,17 @@ timeout = httpx.Timeout(timeout=600.0)  # 10 minutes
 
 class ProxyRequest(BaseModel):
     model: str
-    prefer_gpu: bool = False
 
     class Config:
         extra = "allow"  # Allow extra fields
 
 
-async def process_response(
-    response: httpx.Response, user_context: UserContext, background_tasks: BackgroundTasks
-) -> Union[Response, StreamingResponse]:
-    """
-    Process the response from the upstream server and extract token information.
+client = httpx.AsyncClient(timeout=timeout)
 
-    Args:
-        response: The response from the upstream server
-        user_context: Context
-        background_tasks: Tasks
 
-    Returns:
-        Either a Response or StreamingResponse object with the processed data
-    """
-    content_type = response.headers.get("Content-Type", "")
-
-    # Handle JSON responses - extract token information
-    if "application/json" in content_type:
-        try:
-            # Get response JSON to extract token counts
-            response_bytes = response.content
-            response_json = json.loads(response_bytes)
-
-            # Extract usage info and queue background task
-            if background_tasks:
-                try:
-                    usage_data = UsageFullData(
-                        **user_context.model_dump(),
-                        **extract_usage_info(response_json, user_context).model_dump(),
-                    )
-                    background_tasks.add_task(report_usage_event_task, usage_data)
-                except Exception as e:
-                    print(f"Exception occurred during usage report {str(e)}")
-
-            return Response(
-                content=response_bytes,
-                status_code=response.status_code,
-                headers=dict(response.headers),
-                media_type=content_type,
-            )
-
-        except Exception as e:
-            print(f"Failed to parse JSON response: {e}")
-
-    # All other (streaming or binary) responses
-    try:
-        # Read full content for usage extraction
-        response_bytes = response.content
-
-        if background_tasks:
-            try:
-                usage_data = UsageFullData(
-                    **user_context.model_dump(),
-                    **extract_usage_info_from_raw(response_bytes, user_context).model_dump(),
-                )
-                background_tasks.add_task(report_usage_event_task, usage_data)
-            except Exception as e:
-                print(f"Streaming usage extraction failed: {e}")
-
-        return Response(
-            content=response_bytes,
-            status_code=response.status_code,
-            headers=dict(response.headers),
-            media_type=content_type,
-        )
-
-    except Exception as e:
-        print(f"Unhandled response type: {e}")
-        return Response(status_code=500, content="Error handling upstream response")
+@router.on_event("shutdown")
+async def shutdown_event():
+    await client.aclose()
 
 
 @router.get("/metrics")
@@ -107,13 +43,10 @@ async def proxy_metrics(request: Request):
     headers = dict(request.headers)
     headers.pop("host", None)
 
-    # Forward the GET request to the upstream server
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        try:
-            response: httpx.Response = await client.get(url, headers=headers, params=request.query_params)
-        except Exception as e:
-            print("error", e)
-            raise HTTPException(status_code=500, detail=f"Error forwarding request: {str(e)}")
+    try:
+        response: httpx.Response = await client.get(url, headers=headers, params=request.query_params)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error forwarding request: {str(e)}")
 
     return Response(
         content=response.content,
@@ -150,17 +83,65 @@ async def proxy_request(
     # Clean up headers
     headers.pop("host", None)
 
-    # Forward the request
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        try:
-            # Forward the request to the selected server
-            url = f"{config.MODEL_CONFIG.url}/{full_path}"
+    url = f"{config.MODEL_CONFIG.url}/{full_path}"
 
-            response: httpx.Response = await client.post(
-                url, content=body, headers=headers, params=request.query_params
+    try:
+        req = client.build_request("POST", url, content=body, headers=headers, params=request.query_params)
+        response = await client.send(req, stream=True)
+        response.raise_for_status()
+
+        is_streaming_response = response.headers.get("content-type", "") == "text/event-stream"
+
+        if is_streaming_response:
+
+            async def generate_chunks():
+                full_response_buffer = b""  # Buffer to collect all chunks
+                try:
+                    async for chunk in response.aiter_bytes():
+                        yield chunk
+                        full_response_buffer += chunk
+                finally:
+                    await response.aclose()
+                    if background_tasks:
+                        try:
+                            # Pass the full accumulated buffer to the extraction function
+                            usage_data = UsageFullData(
+                                **user_context.model_dump(),
+                                **extract_usage_info_from_raw(full_response_buffer, user_context).model_dump(),
+                            )
+                            background_tasks.add_task(report_usage_event_task, usage_data)
+                        except Exception as e:
+                            print(f"Streaming usage extraction failed: {e}")
+
+            return StreamingResponse(
+                content=generate_chunks(),
+                status_code=response.status_code,
+                headers=dict(response.headers),
+                media_type=response.headers.get("Content-Type", ""),
             )
-        except Exception as e:
-            print("error", e)
-            raise HTTPException(status_code=500, detail=f"Error forwarding request: {str(e)}")
+        else:
+            response_bytes = await response.aread()
+            await response.aclose()
 
-    return await process_response(response, user_context, background_tasks)
+            response_json = json.loads(response_bytes)
+
+            if background_tasks:
+                try:
+                    usage_data = UsageFullData(
+                        **user_context.model_dump(),
+                        **extract_usage_info(response_json, user_context).model_dump(),
+                    )
+                    background_tasks.add_task(report_usage_event_task, usage_data)
+                except Exception as e:
+                    print(f"Exception occurred during usage report {str(e)}")
+
+            return Response(
+                content=response_bytes,
+                status_code=response.status_code,
+                headers=dict(response.headers),
+                media_type=response.headers.get("Content-Type", ""),
+            )
+
+    except Exception as e:
+        print(f"Error forwarding request: {e}")
+        raise HTTPException(status_code=500, detail=f"Error forwarding request: {str(e)}")

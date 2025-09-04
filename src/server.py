@@ -1,11 +1,8 @@
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 
-from src.api_keys import KeysManager
 from src.api_keys import router as libertai_router
 from src.proxy import router as proxy_router
-
-keys_manager = KeysManager()
 
 app = FastAPI(title="LibertAI backend service")
 
