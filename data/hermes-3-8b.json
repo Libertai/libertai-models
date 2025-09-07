@@ -1,5 +1,5 @@
 {
-  "id": "hermes-3-8b-tee",
+  "id": "hermes-3-8b",
   "url": "http://localhost:8001",
   "allowed_paths": [
     "v1/completions",
