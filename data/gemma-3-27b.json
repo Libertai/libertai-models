@@ -1,0 +1,9 @@
+{
+  "id": "gemma-3-27b",
+  "url": "http://localhost:8001",
+  "allowed_paths": [
+    "v1/completions",
+    "v1/chat/completions",
+    "completions"
+  ]
+}
