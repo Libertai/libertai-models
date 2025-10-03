@@ -14,8 +14,8 @@ class KeysManager:
             cls._instance = super(KeysManager, cls).__new__(cls, *args, **kwargs)
         return cls._instance
 
-    def add_keys(self, keys):
-        self.keys.update(keys)
+    def reset_keys(self, new_keys: set[str]):
+        self.keys = new_keys
 
     def key_exists(self, key):
         return key in self.keys
@@ -43,7 +43,7 @@ async def receive_api_keys(payload: EncryptedApiKeysPayload):
 
         # Update the KeysManager with the new keys
         keys_manager = KeysManager()
-        keys_manager.add_keys(set(keys))
+        keys_manager.reset_keys(set(keys))
 
         return {"status": "success", "keys_received": len(keys)}
 
