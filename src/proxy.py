@@ -35,16 +35,20 @@ async def shutdown_event():
     await client.aclose()
 
 
-@router.get("/metrics")
-async def proxy_metrics(request: Request):
-    url = f"{config.MODEL_CONFIG.url}/metrics"
+@router.get("/metrics/{model_name}")
+async def proxy_metrics(request: Request, model_name: str):
+    if model_name not in config.MODEL_CONFIGS:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=f"Model '{model_name}' not found")
+
+    model_config = config.MODEL_CONFIGS[model_name]
+    url = f"{model_config.url}/metrics"
 
     # Get the original request headers
     headers = dict(request.headers)
     headers.pop("host", None)
 
     try:
-        response: httpx.Response = await client.get(url, headers=headers, params=request.query_params)
+        response: httpx.Response = await client.get(url, headers=headers)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error forwarding request: {str(e)}")
 
@@ -68,11 +72,16 @@ async def proxy_request(
     if not keys_manager.key_exists(token):
         raise HTTPException(status_code=HTTPStatus.UNAUTHORIZED, detail="Invalid API key")
 
-    if full_path not in config.MODEL_CONFIG.allowed_paths:
-        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Invalid inference path")
-
     # Get model from request
     model_name = proxy_request_data.model
+
+    if model_name not in config.MODEL_CONFIGS:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=f"Model '{model_name}' not found")
+
+    model_config = config.MODEL_CONFIGS[model_name]
+
+    if full_path not in model_config.allowed_paths:
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Invalid inference path")
 
     user_context = UserContext(key=token, model_name=model_name, endpoint=full_path)
 
@@ -83,7 +92,7 @@ async def proxy_request(
     # Clean up headers
     headers.pop("host", None)
 
-    url = f"{config.MODEL_CONFIG.url}/{full_path}"
+    url = f"{model_config.url}/{full_path}"
 
     try:
         req = client.build_request("POST", url, content=body, headers=headers, params=request.query_params)

@@ -13,7 +13,7 @@ class ModelConfig(BaseModel):
 
 class _Config:
     BACKEND_URL: str
-    MODEL_CONFIG: ModelConfig
+    MODEL_CONFIGS: dict[str, ModelConfig]
     API_PUBLIC_KEY: str
 
     def __init__(self):
@@ -22,18 +22,28 @@ class _Config:
         self.BACKEND_URL = os.getenv("BACKEND_URL")
         self.API_PUBLIC_KEY = os.getenv("API_PUBLIC_KEY")
 
-        # Load model configuration from environment variable or file
-        model_config = os.getenv("MODEL_CONFIG")
-        self.MODELS = {}
+        # Load model configurations from model names in environment variable
+        model_names = os.getenv("MODELS", "").split(",")
+        self.MODEL_CONFIGS = {}
 
-        try:
-            with open(model_config) as f:
-                model_data = json.load(f)
-            self.MODEL_CONFIG = ModelConfig(**model_data)
+        for model_name in model_names:
+            model_name = model_name.strip()
+            if not model_name:
+                continue
 
-        except json.JSONDecodeError as error:
-            print(f"Error on {model_config} config file")
-            print(error)
+            model_config_path = f"./data/{model_name}.json"
+
+            try:
+                with open(model_config_path) as f:
+                    model_data = json.load(f)
+                model_config = ModelConfig(**model_data)
+                self.MODEL_CONFIGS[model_config.id] = model_config
+
+            except json.JSONDecodeError as error:
+                print(f"Error on {model_config_path} config file")
+                print(error)
+            except FileNotFoundError:
+                print(f"Config file not found: {model_config_path}")
 
 
 config = _Config()

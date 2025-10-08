@@ -1,6 +1,6 @@
 {
   "id": "gemma-3-27b",
-  "url": "http://localhost:8001",
+  "url": "http://localhost:8002",
   "allowed_paths": [
     "v1/completions",
     "v1/chat/completions",
