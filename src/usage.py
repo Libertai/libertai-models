@@ -40,13 +40,13 @@ def extract_usage_info_from_raw(raw_data: bytes, context: UserContext) -> Usage:
 
     if context.endpoint in ["v1/chat/completions", "v1/completions"]:
         # Look for the embedded usage JSON object
-        usage_match = re.search(r'"usage"\s*:\s*({.*?})', text)
+        usage_match = re.search(r'"timings"\s*:\s*({.*?})', text)
         if usage_match:
             try:
                 usage_json = json.loads(usage_match.group(1))
                 return Usage(
-                    input_tokens=int(usage_json.get("prompt_tokens", 0)),
-                    output_tokens=int(usage_json.get("completion_tokens", 0)),
+                    input_tokens=int(usage_json.get("cache_n", 0)) + int(usage_json.get("prompt_n", 0)),
+                    output_tokens=int(usage_json.get("predicted_n", 0)),
                     cached_tokens=0,
                 )
             except Exception as e:
