@@ -1,9 +1,9 @@
 import json
 import os
+from typing import Literal
 
 from dotenv import load_dotenv
-from typing import Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 class TextModelConfig(BaseModel):
