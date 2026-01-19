@@ -9,7 +9,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
 from src.api_keys import KeysManager
-from src.config import config
+from src.config import TextModelConfig, config
 from src.interfaces.usage import UserContext, UsageFullData
 from src.usage import report_usage_event_task, extract_usage_info_from_raw, extract_usage_info
 
@@ -41,6 +41,9 @@ async def proxy_metrics(request: Request, model_name: str):
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=f"Model '{model_name}' not found")
 
     model_config = config.MODEL_CONFIGS[model_name]
+    if not isinstance(model_config, TextModelConfig):
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Metrics only available for text models")
+
     url = f"{model_config.url}/metrics"
 
     # Get the original request headers
@@ -79,6 +82,9 @@ async def proxy_request(
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=f"Model '{model_name}' not found")
 
     model_config = config.MODEL_CONFIGS[model_name]
+
+    if not isinstance(model_config, TextModelConfig):
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="This endpoint is only for text models")
 
     if full_path not in model_config.allowed_paths:
         raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Invalid inference path")

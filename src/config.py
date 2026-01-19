@@ -2,13 +2,25 @@ import json
 import os
 
 from dotenv import load_dotenv
-from pydantic import BaseModel
+from typing import Literal
+from pydantic import BaseModel, Field
 
 
-class ModelConfig(BaseModel):
+class TextModelConfig(BaseModel):
+    type: Literal["text"] = "text"
     id: str
     url: str
     allowed_paths: list[str]
+
+
+class ImageModelConfig(BaseModel):
+    type: Literal["image"] = "image"
+    id: str
+    local_path: str
+    allowed_paths: list[str]
+
+
+ModelConfig = TextModelConfig | ImageModelConfig
 
 
 class _Config:
@@ -36,7 +48,11 @@ class _Config:
             try:
                 with open(model_config_path) as f:
                     model_data = json.load(f)
-                model_config = ModelConfig(**model_data)
+                # Pydantic will automatically discriminate based on 'type' field
+                if model_data.get("type") == "image":
+                    model_config = ImageModelConfig(**model_data)
+                else:
+                    model_config = TextModelConfig(**model_data)
                 self.MODEL_CONFIGS[model_config.id] = model_config
 
             except json.JSONDecodeError as error:
