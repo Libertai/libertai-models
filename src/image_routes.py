@@ -19,8 +19,9 @@ pipeline_manager = ImagePipelineManager()
 
 # Constants
 MAX_DIMENSION = 2048
-MAX_STEPS = 100
+MAX_STEPS = 50
 MIN_STEPS = 1
+DEFAULT_Z_IMAGE_TURBO_STEPS = 9
 
 
 # Helper functions
@@ -36,8 +37,7 @@ def validate_dimensions(width: int, height: int) -> None:
         raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Width and height must be positive")
     if width > MAX_DIMENSION or height > MAX_DIMENSION:
         raise HTTPException(
-            status_code=HTTPStatus.BAD_REQUEST,
-            detail=f"Width and height must not exceed {MAX_DIMENSION}px"
+            status_code=HTTPStatus.BAD_REQUEST, detail=f"Width and height must not exceed {MAX_DIMENSION}px"
         )
 
 
@@ -45,8 +45,7 @@ def validate_steps(steps: int) -> None:
     """Validate number of inference steps is within reasonable range"""
     if steps < MIN_STEPS or steps > MAX_STEPS:
         raise HTTPException(
-            status_code=HTTPStatus.BAD_REQUEST,
-            detail=f"Steps must be between {MIN_STEPS} and {MAX_STEPS}"
+            status_code=HTTPStatus.BAD_REQUEST, detail=f"Steps must be between {MIN_STEPS} and {MAX_STEPS}"
         )
 
 
@@ -69,10 +68,7 @@ def validate_model_and_endpoint(model_name: str, endpoint: str, token: str) -> I
     # Model type
     model_config = config.MODEL_CONFIGS[model_name]
     if not isinstance(model_config, ImageModelConfig):
-        raise HTTPException(
-            status_code=HTTPStatus.BAD_REQUEST,
-            detail=f"Model '{model_name}' is not an image model"
-        )
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=f"Model '{model_name}' is not an image model")
 
     # Endpoint path
     if endpoint not in model_config.allowed_paths:
@@ -122,7 +118,7 @@ class A1111Request(BaseModel):
     negative_prompt: str = ""
     width: int = 1024
     height: int = 1024
-    steps: int = 9  # Z-Image-Turbo works well with 8-9 steps
+    steps: int = DEFAULT_Z_IMAGE_TURBO_STEPS
     cfg_scale: float = 0.0  # Turbo model doesn't need CFG
     sampler_name: str = "Euler a"  # Ignored, just for API compat
     seed: int = -1
@@ -164,8 +160,7 @@ async def generate_image_openai(
         width, height = map(int, parts)
     except ValueError:
         raise HTTPException(
-            status_code=HTTPStatus.BAD_REQUEST,
-            detail="Invalid size format. Use WIDTHxHEIGHT (e.g., 1024x1024)"
+            status_code=HTTPStatus.BAD_REQUEST, detail="Invalid size format. Use WIDTHxHEIGHT (e.g., 1024x1024)"
         )
 
     validate_prompt(request.prompt)
@@ -182,7 +177,7 @@ async def generate_image_openai(
             prompt=request.prompt,
             width=width,
             height=height,
-            steps=9,  # Z-Image-Turbo optimal
+            steps=DEFAULT_Z_IMAGE_TURBO_STEPS,  # Z-Image-Turbo optimal
             guidance_scale=0.0,  # Turbo doesn't need CFG
         )
 

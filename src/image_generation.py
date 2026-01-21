@@ -3,17 +3,24 @@ import io
 import threading
 from typing import Optional
 
-import torch
-from diffusers import ZImagePipeline
-from PIL import Image
+try:
+    import torch
+    from diffusers import ZImagePipeline
+    from PIL import Image
+    DIFFUSERS_AVAILABLE = True
+except ImportError:
+    DIFFUSERS_AVAILABLE = False
+    torch = None  # type: ignore
+    ZImagePipeline = None  # type: ignore
+    Image = None  # type: ignore
 
 
 class ImagePipelineManager:
     """Singleton managing loaded Z-Image pipeline with thread-safe loading"""
 
     _instance: Optional["ImagePipelineManager"] = None
-    _pipeline: Optional[ZImagePipeline] = None
-    _device: str = "cuda" if torch.cuda.is_available() else "cpu"
+    _pipeline: Optional["ZImagePipeline"] = None  # type: ignore
+    _device: str = "cuda" if DIFFUSERS_AVAILABLE and torch.cuda.is_available() else "cpu"  # type: ignore
     _lock: threading.Lock = threading.Lock()
 
     def __new__(cls):
@@ -23,6 +30,12 @@ class ImagePipelineManager:
 
     def load_pipeline(self, model_path: str) -> None:
         """Load Z-Image pipeline if not already loaded (thread-safe)"""
+        if not DIFFUSERS_AVAILABLE:
+            raise RuntimeError(
+                "Image generation dependencies not installed. "
+                "Install with: pip install -e '.[image]' or poetry install --extras image"
+            )
+
         if self._pipeline is None:
             with self._lock:
                 # Double-check after acquiring lock
@@ -54,7 +67,7 @@ class ImagePipelineManager:
 
 
 def generate_image(
-    pipeline: ZImagePipeline,
+    pipeline: "ZImagePipeline",  # type: ignore
     prompt: str,
     width: int = 1024,
     height: int = 1024,
@@ -77,6 +90,12 @@ def generate_image(
     Returns:
         Base64-encoded PNG image string
     """
+    if not DIFFUSERS_AVAILABLE:
+        raise RuntimeError(
+            "Image generation dependencies not installed. "
+            "Install with: pip install -e '.[image]' or poetry install --extras image"
+        )
+
     try:
         generator = None
         if seed >= 0:
@@ -100,10 +119,10 @@ def generate_image(
 
         return image_b64
 
-    except torch.cuda.OutOfMemoryError as e:
+    except torch.cuda.OutOfMemoryError as e:  # type: ignore
         print(f"[Image Generation] CUDA OOM during generation: {e}")
         raise RuntimeError("GPU out of memory during image generation.") from e
     finally:
         # Clear CUDA cache to prevent memory accumulation
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        if DIFFUSERS_AVAILABLE and torch.cuda.is_available():  # type: ignore
+            torch.cuda.empty_cache()  # type: ignore
