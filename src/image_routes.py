@@ -121,7 +121,6 @@ class A1111Request(BaseModel):
     height: int = 1024
     steps: int = DEFAULT_Z_IMAGE_TURBO_STEPS
     cfg_scale: float = 0.0  # Turbo model doesn't need CFG
-    sampler_name: str = "Euler a"  # Ignored, just for API compat
     seed: int = -1
     remove_background: bool = False  # Remove background with rembg
 
