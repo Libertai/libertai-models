@@ -7,12 +7,26 @@ try:
     import torch
     from diffusers import ZImagePipeline
     from PIL import Image
+
     DIFFUSERS_AVAILABLE = True
 except ImportError:
     DIFFUSERS_AVAILABLE = False
     torch = None  # type: ignore
     ZImagePipeline = None  # type: ignore
     Image = None  # type: ignore
+
+# Optional: background removal
+try:
+    from rembg import remove as remove_bg, new_session  # type: ignore
+
+    # Force CPU for rembg to avoid GPU memory conflicts with Z-Image
+    # Use birefnet-general for best quality - handles holes/gaps well
+    REMBG_SESSION = new_session("birefnet-general", providers=["CPUExecutionProvider"])
+    REMBG_AVAILABLE = True
+except ImportError:
+    REMBG_AVAILABLE = False
+    REMBG_SESSION = None
+    print("[Image Generation] rembg not installed, background removal disabled")
 
 
 class ImagePipelineManager:
@@ -74,6 +88,7 @@ def generate_image(
     steps: int = 9,
     guidance_scale: float = 0.0,
     seed: int = -1,
+    remove_background: bool = False,
 ) -> str:
     """
     Generate image and return base64-encoded PNG.
@@ -86,6 +101,7 @@ def generate_image(
         steps: Number of inference steps (Z-Image-Turbo works well with 8-9)
         guidance_scale: CFG scale (Turbo model doesn't need CFG, use 0.0)
         seed: Random seed (-1 for random)
+        remove_background: Remove background with rembg (requires rembg installed)
 
     Returns:
         Base64-encoded PNG image string
@@ -112,7 +128,17 @@ def generate_image(
 
         image: Image.Image = result.images[0]
 
-        # Convert to base64 PNG using context manager
+        # Remove background if requested
+        if remove_background:
+            if REMBG_AVAILABLE and REMBG_SESSION:
+                image = remove_bg(
+                    image,
+                    session=REMBG_SESSION,
+                )
+            else:
+                print("[Image Generation] Warning: remove_background requested but rembg not available")
+
+        # Convert to base64 PNG using context manager (supports transparency)
         with io.BytesIO() as buffer:
             image.save(buffer, format="PNG")
             image_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")

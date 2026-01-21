@@ -97,6 +97,7 @@ class OpenAIImageRequest(BaseModel):
     n: int = 1
     size: str = "1024x1024"
     response_format: str = "b64_json"  # Only b64_json supported
+    remove_background: bool = False  # Remove background with rembg
 
     class Config:
         extra = "allow"
@@ -122,6 +123,7 @@ class A1111Request(BaseModel):
     cfg_scale: float = 0.0  # Turbo model doesn't need CFG
     sampler_name: str = "Euler a"  # Ignored, just for API compat
     seed: int = -1
+    remove_background: bool = False  # Remove background with rembg
 
     class Config:
         extra = "allow"
@@ -179,6 +181,7 @@ async def generate_image_openai(
             height=height,
             steps=DEFAULT_Z_IMAGE_TURBO_STEPS,  # Z-Image-Turbo optimal
             guidance_scale=0.0,  # Turbo doesn't need CFG
+            remove_background=request.remove_background,
         )
 
         # Track usage
@@ -230,6 +233,7 @@ async def generate_image_a1111(
             steps=request.steps,
             guidance_scale=request.cfg_scale,
             seed=request.seed,
+            remove_background=request.remove_background,
         )
 
         # Track usage
@@ -245,6 +249,7 @@ async def generate_image_a1111(
                 "steps": request.steps,
                 "cfg_scale": request.cfg_scale,
                 "seed": request.seed,
+                "remove_background": request.remove_background,
             },
             info="Generated with Z-Image-Turbo",
         )
