@@ -1,0 +1,9 @@
+{
+  "id": "z-image-turbo",
+  "type": "image",
+  "local_path": "Tongyi-MAI/Z-Image-Turbo",
+  "allowed_paths": [
+    "v1/images/generations",
+    "sdapi/v1/txt2img"
+  ]
+}

@@ -9,7 +9,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
 from src.api_keys import KeysManager
-from src.config import config
+from src.config import TextModelConfig, config
 from src.interfaces.usage import UserContext, UsageFullData
 from src.usage import report_usage_event_task, extract_usage_info_from_raw, extract_usage_info
 
@@ -35,13 +35,23 @@ async def shutdown_event():
     await client.aclose()
 
 
-@router.get("/metrics/{model_name}")
-async def proxy_metrics(request: Request, model_name: str):
+@router.get("/health/{model_name}")
+async def proxy_health(request: Request, model_name: str):
     if model_name not in config.MODEL_CONFIGS:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=f"Model '{model_name}' not found")
 
     model_config = config.MODEL_CONFIGS[model_name]
-    url = f"{model_config.url}/metrics"
+
+    # For image models, return hardcoded status
+    if not isinstance(model_config, TextModelConfig):
+        return Response(
+            content=json.dumps({"status": "ok"}).encode(),
+            status_code=200,
+            media_type="application/json",
+        )
+
+    # For text models, proxy to llamacpp /health endpoint
+    url = f"{model_config.url}/health"
 
     # Get the original request headers
     headers = dict(request.headers)
@@ -79,6 +89,9 @@ async def proxy_request(
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=f"Model '{model_name}' not found")
 
     model_config = config.MODEL_CONFIGS[model_name]
+
+    if not isinstance(model_config, TextModelConfig):
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="This endpoint is only for text models")
 
     if full_path not in model_config.allowed_paths:
         raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Invalid inference path")
