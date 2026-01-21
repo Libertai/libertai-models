@@ -35,16 +35,23 @@ async def shutdown_event():
     await client.aclose()
 
 
-@router.get("/metrics/{model_name}")
-async def proxy_metrics(request: Request, model_name: str):
+@router.get("/health/{model_name}")
+async def proxy_health(request: Request, model_name: str):
     if model_name not in config.MODEL_CONFIGS:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=f"Model '{model_name}' not found")
 
     model_config = config.MODEL_CONFIGS[model_name]
-    if not isinstance(model_config, TextModelConfig):
-        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Metrics only available for text models")
 
-    url = f"{model_config.url}/metrics"
+    # For image models, return hardcoded status
+    if not isinstance(model_config, TextModelConfig):
+        return Response(
+            content=json.dumps({"status": "ok"}).encode(),
+            status_code=200,
+            media_type="application/json",
+        )
+
+    # For text models, proxy to llamacpp /health endpoint
+    url = f"{model_config.url}/health"
 
     # Get the original request headers
     headers = dict(request.headers)
