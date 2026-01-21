@@ -19,9 +19,8 @@ except ImportError:
 try:
     from rembg import remove as remove_bg, new_session  # type: ignore
 
-    # Force CPU for rembg to avoid GPU memory conflicts with Z-Image
-    # Use birefnet-general for best quality - handles holes/gaps well
-    REMBG_SESSION = new_session("birefnet-general", providers=["CPUExecutionProvider"])
+    # Force CPU for rembg to avoid GPU memory conflicts with the main model
+    REMBG_SESSION = new_session("u2net", providers=["CPUExecutionProvider"])
     REMBG_AVAILABLE = True
 except ImportError:
     REMBG_AVAILABLE = False
