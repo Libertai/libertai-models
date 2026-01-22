@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from src.api_keys import KeysManager
 from src.config import TextModelConfig, config
-from src.interfaces.usage import UserContext, UsageFullData
+from src.interfaces.usage import TextUsageFullData, UserContext
 from src.usage import report_usage_event_task, extract_usage_info_from_raw, extract_usage_info
 
 router = APIRouter(tags=["Proxy service"])
@@ -127,7 +127,7 @@ async def proxy_request(
                     if background_tasks:
                         try:
                             # Pass the full accumulated buffer to the extraction function
-                            usage_data = UsageFullData(
+                            usage_data = TextUsageFullData(
                                 **user_context.model_dump(),
                                 **extract_usage_info_from_raw(full_response_buffer, user_context).model_dump(),
                             )
@@ -149,7 +149,7 @@ async def proxy_request(
 
             if background_tasks:
                 try:
-                    usage_data = UsageFullData(
+                    usage_data = TextUsageFullData(
                         **user_context.model_dump(),
                         **extract_usage_info(response_json, user_context).model_dump(),
                     )

@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from src.api_keys import KeysManager
 from src.config import ImageModelConfig, config
 from src.image_generation import ImagePipelineManager, generate_image
-from src.interfaces.usage import Usage, UserContext, UsageFullData
+from src.interfaces.usage import ImageUsage, ImageUsageFullData, UserContext
 from src.usage import report_usage_event_task
 
 router = APIRouter(tags=["Image Generation"])
@@ -78,12 +78,12 @@ def validate_model_and_endpoint(model_name: str, endpoint: str, token: str) -> I
 
 
 def track_usage(token: str, model_name: str, endpoint: str, background_tasks: BackgroundTasks) -> None:
-    """Track image generation usage (0 tokens)"""
+    """Track image generation usage (1 image per request)"""
     try:
         user_context = UserContext(key=token, model_name=model_name, endpoint=endpoint)
-        usage_data = UsageFullData(
+        usage_data = ImageUsageFullData(
             **user_context.model_dump(),
-            **Usage(input_tokens=0, output_tokens=0, cached_tokens=0).model_dump(),
+            **ImageUsage(image_count=1).model_dump(),
         )
         background_tasks.add_task(report_usage_event_task, usage_data)
     except Exception as e:

@@ -5,10 +5,10 @@ from typing import Any
 import httpx
 
 from src.config import config
-from src.interfaces.usage import UsageFullData, UserContext, Usage
+from src.interfaces.usage import ImageUsageFullData, TextUsageFullData, Usage, UserContext
 
 
-async def report_usage_event_task(usage: UsageFullData):
+async def report_usage_event_task(usage: TextUsageFullData | ImageUsageFullData):
     print(f"Collecting usage {usage}")
     try:
         timeout = httpx.Timeout(timeout=30.0)
