@@ -1,3 +1,4 @@
+import random
 import time
 from http import HTTPStatus
 from typing import Annotated
@@ -223,6 +224,9 @@ async def generate_image_a1111(
         pipeline_manager.load_pipeline(model_config.local_path)
         pipeline = pipeline_manager.get_pipeline()
 
+        # Create seed if none is passed
+        seed = request.seed if request.seed >= 0 else random.randint(0, 2147483647)
+
         # Generate image (note: Z-Image doesn't support negative prompts natively)
         image_b64 = generate_image(
             pipeline=pipeline,
@@ -231,7 +235,7 @@ async def generate_image_a1111(
             height=request.height,
             steps=request.steps,
             guidance_scale=request.cfg_scale,
-            seed=request.seed,
+            seed=seed,
             remove_background=request.remove_background,
         )
 
@@ -247,7 +251,7 @@ async def generate_image_a1111(
                 "height": request.height,
                 "steps": request.steps,
                 "cfg_scale": request.cfg_scale,
-                "seed": request.seed,
+                "seed": seed,
                 "remove_background": request.remove_background,
             },
             info="Generated with Z-Image-Turbo",
