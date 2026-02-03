@@ -18,6 +18,11 @@ keys_manager = KeysManager()
 security = HTTPBearer()
 
 timeout = httpx.Timeout(timeout=600.0)  # 10 minutes
+limits = httpx.Limits(
+    max_connections=500,
+    max_keepalive_connections=100,
+    keepalive_expiry=30.0,  # Recycle idle connections after 30s
+)
 
 
 class ProxyRequest(BaseModel):
@@ -27,7 +32,7 @@ class ProxyRequest(BaseModel):
         extra = "allow"  # Allow extra fields
 
 
-client = httpx.AsyncClient(timeout=timeout)
+client = httpx.AsyncClient(timeout=timeout, limits=limits)
 
 
 @router.on_event("shutdown")
@@ -60,7 +65,7 @@ async def proxy_health(request: Request, model_name: str):
     try:
         response: httpx.Response = await client.get(url, headers=headers)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error forwarding request: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error forwarding request: {type(e).__name__}: {e}")
 
     return Response(
         content=response.content,
@@ -165,5 +170,4 @@ async def proxy_request(
             )
 
     except Exception as e:
-        print(f"Error forwarding request: {e}")
-        raise HTTPException(status_code=500, detail=f"Error forwarding request: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error forwarding request: {type(e).__name__}: {e}")
