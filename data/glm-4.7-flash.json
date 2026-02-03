@@ -1,5 +1,5 @@
 {
-  "id": "glm-4.5-air",
+  "id": "glm-4.7-flash",
   "url": "http://localhost:8003",
   "allowed_paths": [
     "v1/completions",
