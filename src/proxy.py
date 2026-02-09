@@ -115,7 +115,17 @@ async def proxy_request(
     try:
         req = client.build_request("POST", url, content=body, headers=headers, params=request.query_params)
         response = await client.send(req, stream=True)
-        response.raise_for_status()
+
+        if response.status_code >= 400:
+            error_body = await response.aread()
+            await response.aclose()
+            # Try to forward the original error from llama.cpp
+            try:
+                error_json = json.loads(error_body)
+                detail = error_json.get("error", {}).get("message", error_body.decode(errors="replace"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                detail = error_body.decode(errors="replace") if error_body else f"Upstream returned {response.status_code}"
+            raise HTTPException(status_code=response.status_code, detail=detail)
 
         is_streaming_response = response.headers.get("content-type", "") == "text/event-stream"
 
