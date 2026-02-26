@@ -12,6 +12,8 @@ class UserContext(BaseModel):
     key: str
     model_name: str
     endpoint: str
+    payment_payload: str | None = None
+    payment_requirements: str | None = None
 
 
 class TextUsage(BaseModel):

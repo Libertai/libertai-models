@@ -78,10 +78,19 @@ def validate_model_and_endpoint(model_name: str, endpoint: str, token: str) -> I
     return model_config
 
 
-def track_usage(token: str, model_name: str, endpoint: str, background_tasks: BackgroundTasks) -> None:
+def track_usage(
+    token: str,
+    model_name: str,
+    endpoint: str,
+    background_tasks: BackgroundTasks,
+) -> None:
     """Track image generation usage (1 image per request)"""
     try:
-        user_context = UserContext(key=token, model_name=model_name, endpoint=endpoint)
+        user_context = UserContext(
+            key=token,
+            model_name=model_name,
+            endpoint=endpoint,
+        )
         usage_data = ImageUsageFullData(
             **user_context.model_dump(),
             **ImageUsage(image_count=1).model_dump(),
