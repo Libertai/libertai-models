@@ -3,7 +3,7 @@ import time
 from http import HTTPStatus
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
@@ -83,6 +83,8 @@ def track_usage(
     model_name: str,
     endpoint: str,
     background_tasks: BackgroundTasks,
+    payment_payload: str | None = None,
+    payment_requirements: str | None = None,
 ) -> None:
     """Track image generation usage (1 image per request)"""
     try:
@@ -90,6 +92,8 @@ def track_usage(
             key=token,
             model_name=model_name,
             endpoint=endpoint,
+            payment_payload=payment_payload,
+            payment_requirements=payment_requirements,
         )
         usage_data = ImageUsageFullData(
             **user_context.model_dump(),
@@ -149,9 +153,12 @@ async def generate_image_openai(
     request: OpenAIImageRequest,
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)],
     background_tasks: BackgroundTasks,
+    raw_request: Request,
 ):
     """OpenAI-compatible image generation endpoint"""
     token = credentials.credentials
+    payment_payload = raw_request.headers.get("x-payment") or None
+    payment_requirements = raw_request.headers.get("x-payment-requirements") or None
 
     # Validate model and endpoint
     model_config = validate_model_and_endpoint(request.model, "v1/images/generations", token)
@@ -194,7 +201,14 @@ async def generate_image_openai(
         )
 
         # Track usage
-        track_usage(token, request.model, "v1/images/generations", background_tasks)
+        track_usage(
+            token,
+            request.model,
+            "v1/images/generations",
+            background_tasks,
+            payment_payload=payment_payload,
+            payment_requirements=payment_requirements,
+        )
 
         return OpenAIImageResponse(
             created=int(time.time()),
@@ -215,9 +229,12 @@ async def generate_image_a1111(
     request: A1111Request,
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)],
     background_tasks: BackgroundTasks,
+    raw_request: Request,
 ):
     """AUTOMATIC1111-compatible txt2img endpoint"""
     token = credentials.credentials
+    payment_payload = raw_request.headers.get("x-payment") or None
+    payment_requirements = raw_request.headers.get("x-payment-requirements") or None
 
     # Validate model and endpoint
     model_config = validate_model_and_endpoint(request.model, "sdapi/v1/txt2img", token)
@@ -249,7 +266,14 @@ async def generate_image_a1111(
         )
 
         # Track usage
-        track_usage(token, request.model, "sdapi/v1/txt2img", background_tasks)
+        track_usage(
+            token,
+            request.model,
+            "sdapi/v1/txt2img",
+            background_tasks,
+            payment_payload=payment_payload,
+            payment_requirements=payment_requirements,
+        )
 
         return A1111Response(
             images=[image_b64],
