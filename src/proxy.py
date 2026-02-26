@@ -101,7 +101,16 @@ async def proxy_request(
     if full_path not in model_config.allowed_paths:
         raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Invalid inference path")
 
-    user_context = UserContext(key=token, model_name=model_name, endpoint=full_path)
+    payment_payload = request.headers.get("x-payment") or None
+    payment_requirements = request.headers.get("x-payment-requirements") or None
+
+    user_context = UserContext(
+        key=token,
+        model_name=model_name,
+        endpoint=full_path,
+        payment_payload=payment_payload,
+        payment_requirements=payment_requirements,
+    )
 
     # Get the original request body & headers
     headers = dict(request.headers)
@@ -124,7 +133,9 @@ async def proxy_request(
                 error_json = json.loads(error_body)
                 detail = error_json.get("error", {}).get("message", error_body.decode(errors="replace"))
             except (json.JSONDecodeError, UnicodeDecodeError):
-                detail = error_body.decode(errors="replace") if error_body else f"Upstream returned {response.status_code}"
+                detail = (
+                    error_body.decode(errors="replace") if error_body else f"Upstream returned {response.status_code}"
+                )
             raise HTTPException(status_code=response.status_code, detail=detail)
 
         is_streaming_response = response.headers.get("content-type", "") == "text/event-stream"
