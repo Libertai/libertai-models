@@ -78,15 +78,19 @@ def validate_model_and_endpoint(model_name: str, endpoint: str, token: str) -> I
     return model_config
 
 
+MAX_IMAGES = 4
+
+
 def track_usage(
     token: str,
     model_name: str,
     endpoint: str,
     background_tasks: BackgroundTasks,
+    image_count: int = 1,
     payment_payload: str | None = None,
     payment_requirements: str | None = None,
 ) -> None:
-    """Track image generation usage (1 image per request)"""
+    """Track image generation usage"""
     try:
         user_context = UserContext(
             key=token,
@@ -97,7 +101,7 @@ def track_usage(
         )
         usage_data = ImageUsageFullData(
             **user_context.model_dump(),
-            **ImageUsage(image_count=1).model_dump(),
+            **ImageUsage(image_count=image_count).model_dump(),
         )
         background_tasks.add_task(report_usage_event_task, usage_data)
     except Exception as e:
@@ -164,8 +168,8 @@ async def generate_image_openai(
     model_config = validate_model_and_endpoint(request.model, "v1/images/generations", token)
 
     # Validate parameters
-    if request.n != 1:
-        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Only n=1 is supported")
+    if request.n < 1 or request.n > MAX_IMAGES:
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=f"n must be between 1 and {MAX_IMAGES}")
 
     if request.response_format != "b64_json":
         raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Only b64_json format is supported")
@@ -189,16 +193,19 @@ async def generate_image_openai(
         pipeline_manager.load_pipeline(model_config.local_path)
         pipeline = pipeline_manager.get_pipeline()
 
-        # Generate image
-        image_b64 = generate_image(
-            pipeline=pipeline,
-            prompt=request.prompt,
-            width=width,
-            height=height,
-            steps=DEFAULT_Z_IMAGE_TURBO_STEPS,  # Z-Image-Turbo optimal
-            guidance_scale=0.0,  # Turbo doesn't need CFG
-            remove_background=request.remove_background,
-        )
+        # Generate n images
+        images = []
+        for _ in range(request.n):
+            image_b64 = generate_image(
+                pipeline=pipeline,
+                prompt=request.prompt,
+                width=width,
+                height=height,
+                steps=DEFAULT_Z_IMAGE_TURBO_STEPS,  # Z-Image-Turbo optimal
+                guidance_scale=0.0,  # Turbo doesn't need CFG
+                remove_background=request.remove_background,
+            )
+            images.append(ImageData(b64_json=image_b64))
 
         # Track usage
         track_usage(
@@ -206,13 +213,14 @@ async def generate_image_openai(
             request.model,
             "v1/images/generations",
             background_tasks,
+            image_count=request.n,
             payment_payload=payment_payload,
             payment_requirements=payment_requirements,
         )
 
         return OpenAIImageResponse(
             created=int(time.time()),
-            data=[ImageData(b64_json=image_b64)],
+            data=images,
         )
 
     except RuntimeError as e:
