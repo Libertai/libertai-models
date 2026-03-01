@@ -72,6 +72,10 @@ class ImagePipelineManager:
                         print(f"[Image Generation] Failed to load model: {e}")
                         raise RuntimeError(f"Failed to load image generation model: {str(e)}") from e
 
+    def is_loaded(self) -> bool:
+        """Check if pipeline is loaded and ready"""
+        return self._pipeline is not None
+
     def get_pipeline(self) -> ZImagePipeline:
         """Get loaded pipeline"""
         if self._pipeline is None:

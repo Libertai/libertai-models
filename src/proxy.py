@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from src.api_keys import KeysManager
 from src.config import TextModelConfig, config
+from src.image_generation import ImagePipelineManager
 from src.interfaces.usage import TextUsageFullData, UserContext
 from src.usage import report_usage_event_task, extract_usage_info_from_raw, extract_usage_info
 
@@ -47,8 +48,15 @@ async def proxy_health(request: Request, model_name: str):
 
     model_config = config.MODEL_CONFIGS[model_name]
 
-    # For image models, return hardcoded status
+    # For image models, check if the pipeline is loaded
     if not isinstance(model_config, TextModelConfig):
+        pipeline_manager = ImagePipelineManager()
+        if not pipeline_manager.is_loaded():
+            return Response(
+                content=json.dumps({"status": "error", "detail": "Image model not loaded"}).encode(),
+                status_code=503,
+                media_type="application/json",
+            )
         return Response(
             content=json.dumps({"status": "ok"}).encode(),
             status_code=200,
