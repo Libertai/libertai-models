@@ -38,7 +38,27 @@ def extract_usage_info_from_raw(raw_data: bytes, context: UserContext) -> Usage:
     except Exception:
         raise ValueError("Unable to decode raw response content")
 
-    if context.endpoint in ["v1/chat/completions", "v1/completions"]:
+    if context.endpoint == "v1/messages":
+        # Claude API format: usage is in `message_start` and `message_delta` SSE events,
+        # or directly in the top-level response object
+        input_tokens = 0
+        output_tokens = 0
+
+        # Look for all usage objects in the streamed events
+        for usage_match in re.finditer(r'"usage"\s*:\s*({[^}]+})', text):
+            try:
+                usage_json = json.loads(usage_match.group(1))
+                input_tokens += int(usage_json.get("input_tokens", 0))
+                output_tokens += int(usage_json.get("output_tokens", 0))
+            except (json.JSONDecodeError, ValueError):
+                continue
+
+        if input_tokens > 0 or output_tokens > 0:
+            return Usage(input_tokens=input_tokens, output_tokens=output_tokens, cached_tokens=0)
+
+        raise ValueError("No usage data found in Claude API streaming response")
+
+    elif context.endpoint in ["v1/chat/completions", "v1/completions"]:
         # Look for the embedded usage JSON object
         usage_match = re.search(r'"timings"\s*:\s*({.*?})', text)
         if usage_match:
@@ -75,7 +95,15 @@ def extract_usage_info(data: dict[str, Any], context: UserContext) -> Usage:
         context: The user context
     """
 
-    if context.endpoint in ["v1/chat/completions", "v1/completions"]:
+    if context.endpoint == "v1/messages":
+        # Claude API format: usage.input_tokens and usage.output_tokens
+        usage: dict = data.get("usage", {})
+        return Usage(
+            input_tokens=int(usage.get("input_tokens", 0)),
+            output_tokens=int(usage.get("output_tokens", 0)),
+            cached_tokens=0,
+        )
+    elif context.endpoint in ["v1/chat/completions", "v1/completions"]:
         usage: dict = data.get("usage", {})
         return Usage(
             input_tokens=int(usage.get("prompt_tokens", 0)),
