@@ -58,6 +58,20 @@ def extract_usage_info_from_raw(raw_data: bytes, context: UserContext) -> Usage:
 
         raise ValueError("No usage data found in Claude API streaming response")
 
+    elif context.endpoint == "v1/responses":
+        # Responses API format: usage at top level with input_tokens, output_tokens, total_tokens
+        usage_match = re.search(r'"usage"\s*:\s*({[^}]+})', text)
+        if usage_match:
+            try:
+                usage_json = json.loads(usage_match.group(1))
+                return Usage(
+                    input_tokens=int(usage_json.get("input_tokens", 0)),
+                    output_tokens=int(usage_json.get("output_tokens", 0)),
+                    cached_tokens=0,
+                )
+            except (json.JSONDecodeError, ValueError) as e:
+                raise ValueError(f"Failed to parse usage JSON: {e}")
+
     elif context.endpoint in ["v1/chat/completions", "v1/completions"]:
         # Look for the embedded usage JSON object
         usage_match = re.search(r'"timings"\s*:\s*({.*?})', text)
@@ -97,6 +111,14 @@ def extract_usage_info(data: dict[str, Any], context: UserContext) -> Usage:
 
     if context.endpoint == "v1/messages":
         # Claude API format: usage.input_tokens and usage.output_tokens
+        usage: dict = data.get("usage", {})
+        return Usage(
+            input_tokens=int(usage.get("input_tokens", 0)),
+            output_tokens=int(usage.get("output_tokens", 0)),
+            cached_tokens=0,
+        )
+    elif context.endpoint == "v1/responses":
+        # Responses API format: usage at top level with input_tokens, output_tokens
         usage: dict = data.get("usage", {})
         return Usage(
             input_tokens=int(usage.get("input_tokens", 0)),
