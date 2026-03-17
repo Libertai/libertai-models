@@ -1,0 +1,11 @@
+{
+  "id": "qwen3.5-122b-a10b",
+  "url": "http://localhost:8004",
+  "allowed_paths": [
+    "v1/completions",
+    "v1/chat/completions",
+    "completions",
+    "v1/responses",
+    "v1/messages"
+  ]
+}

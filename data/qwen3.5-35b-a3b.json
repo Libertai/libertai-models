@@ -1,9 +1,11 @@
 {
-  "id": "gemma-3-27b",
+  "id": "qwen3.5-35b-a3b",
   "url": "http://localhost:8002",
   "allowed_paths": [
     "v1/completions",
     "v1/chat/completions",
-    "completions"
+    "completions",
+    "v1/responses",
+    "v1/messages"
   ]
 }
