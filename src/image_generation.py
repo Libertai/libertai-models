@@ -121,7 +121,7 @@ class ImageModelManager:
             print(f"[ImageModelManager] {model_id} loaded and ready!")
         except torch.cuda.OutOfMemoryError as e:
             print(f"[ImageModelManager] CUDA OOM loading {model_id}: {e}")
-            raise
+            raise RuntimeError(f"GPU out of memory loading model {model_id}") from e
         except Exception as e:
             print(f"[ImageModelManager] Failed to load {model_id}: {e}")
             raise RuntimeError(f"Failed to load model {model_id}: {e}") from e

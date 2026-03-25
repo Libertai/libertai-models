@@ -50,24 +50,19 @@ async def shutdown_event():
 @router.get("/health/{model_name}")
 async def proxy_health(request: Request, model_name: str):
     if model_name not in config.MODEL_CONFIGS:
-        return Response(
-            content=json.dumps({"status": "error", "detail": f"Model '{model_name}' not configured"}).encode(),
-            status_code=503,
-            media_type="application/json",
-        )
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=f"Model '{model_name}' not configured")
 
     model_config = config.MODEL_CONFIGS[model_name]
 
     # For image models, check if the pipeline is loaded
     if not isinstance(model_config, TextModelConfig):
-        manager = ImageModelManager()
-        if manager.is_loaded(model_name):
+        if _image_manager.is_loaded(model_name):
             return Response(
                 content=json.dumps({"status": "ok"}).encode(),
                 status_code=200,
                 media_type="application/json",
             )
-        elif manager.is_capable(model_name):
+        elif _image_manager.is_capable(model_name):
             return Response(
                 content=json.dumps({"status": "capable", "detail": "Model not loaded but can be loaded on demand"}).encode(),
                 status_code=202,

@@ -293,24 +293,26 @@ async def edit_image_openai(
     # Extract images from form (supports multiple files under "image" key)
     from PIL import Image as PILImage
 
+    # Guard against decompression bombs
+    PILImage.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
+
     input_images: list[PILImage.Image] = []
     for item in form.getlist("image"):
         if hasattr(item, 'read'):  # UploadFile
-            contents = await item.read()
+            # Read at most MAX_IMAGE_FILE_SIZE + 1 to detect oversized uploads without loading full file
+            contents = await item.read(MAX_IMAGE_FILE_SIZE + 1)
             if len(contents) > MAX_IMAGE_FILE_SIZE:
                 raise HTTPException(
                     status_code=HTTPStatus.BAD_REQUEST,
                     detail=f"Image file too large (max {MAX_IMAGE_FILE_SIZE // (1024 * 1024)}MB)"
                 )
             try:
+                raw_img = PILImage.open(io.BytesIO(contents))
+                raw_img.verify()  # Check headers without full decode
+                # Re-open after verify (verify leaves file in unusable state)
                 img = PILImage.open(io.BytesIO(contents)).convert("RGB")
             except Exception:
                 raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Invalid image file")
-            if img.width * img.height > MAX_IMAGE_PIXELS:
-                raise HTTPException(
-                    status_code=HTTPStatus.BAD_REQUEST,
-                    detail=f"Image too large ({img.width}x{img.height}), max {MAX_IMAGE_PIXELS} pixels"
-                )
             input_images.append(img)
 
     if not input_images:
