@@ -1,0 +1,8 @@
+{
+  "id": "qwen-image-edit",
+  "type": "image-edit",
+  "local_path": "Qwen/Qwen-Image-Edit-2511",
+  "allowed_paths": [
+    "v1/images/edits"
+  ]
+}
