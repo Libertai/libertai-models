@@ -273,6 +273,12 @@ async def edit_image_openai(
     except (ValueError, TypeError):
         raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="n must be an integer")
 
+    seed_raw = form.get("seed", "-1")
+    try:
+        seed = int(str(seed_raw))
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="seed must be an integer")
+
     response_format = form.get("response_format", "b64_json")
     if response_format != "b64_json":
         raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Only b64_json format is supported")
@@ -328,6 +334,7 @@ async def edit_image_openai(
                     images=input_images,
                     prompt=prompt,
                     num_images=n,
+                    seed=seed,
                 )
             finally:
                 image_manager.release(model_name)
