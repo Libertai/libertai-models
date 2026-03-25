@@ -35,6 +35,7 @@ class ImageModelManager:
     _pipelines: dict[str, Any] = {}
     _refcounts: dict[str, int] = {}
     _model_configs: dict[str, Any] = {}  # ImageModelConfig | ImageEditModelConfig
+    _inference_locks: dict[str, threading.Lock] = {}
     _device: str = "cuda" if DIFFUSERS_AVAILABLE and torch.cuda.is_available() else "cpu"
     _lock: threading.Lock = threading.Lock()
 
@@ -44,6 +45,7 @@ class ImageModelManager:
             cls._instance._pipelines = {}
             cls._instance._refcounts = {}
             cls._instance._model_configs = {}
+            cls._instance._inference_locks = {}
         return cls._instance
 
     def register(self, model_id: str, model_config: Any) -> None:
@@ -59,7 +61,11 @@ class ImageModelManager:
         return model_id in self._model_configs
 
     def acquire(self, model_id: str) -> Any:
-        """Get pipeline with refcount increment. Loads on demand. OOM evicts others."""
+        """Get pipeline with refcount increment and per-model inference lock.
+
+        The caller MUST call release() when done. The inference lock serializes
+        pipeline usage per model since diffusers pipelines are not thread-safe.
+        """
         with self._lock:
             if model_id not in self._model_configs:
                 raise RuntimeError(f"Model '{model_id}' not registered")
@@ -76,11 +82,26 @@ class ImageModelManager:
                     else:
                         raise
 
+            if model_id not in self._inference_locks:
+                self._inference_locks[model_id] = threading.Lock()
+
             self._refcounts[model_id] = self._refcounts.get(model_id, 0) + 1
-            return self._pipelines[model_id]
+            pipeline = self._pipelines[model_id]
+            inference_lock = self._inference_locks[model_id]
+
+        # Acquire inference lock outside _lock to avoid holding both
+        inference_lock.acquire()
+        return pipeline
 
     def release(self, model_id: str) -> None:
-        """Decrement refcount after pipeline use."""
+        """Release per-model inference lock and decrement refcount."""
+        # Release inference lock first
+        if model_id in self._inference_locks:
+            try:
+                self._inference_locks[model_id].release()
+            except RuntimeError:
+                pass  # Lock wasn't held
+
         with self._lock:
             if model_id in self._refcounts:
                 self._refcounts[model_id] = max(0, self._refcounts[model_id] - 1)
