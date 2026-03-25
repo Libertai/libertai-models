@@ -1,7 +1,7 @@
 import base64
 import io
 import threading
-from typing import Optional
+from typing import Any, Optional
 
 try:
     import torch
@@ -28,59 +28,118 @@ except ImportError:
     print("[Image Generation] rembg not installed, background removal disabled")
 
 
-class ImagePipelineManager:
-    """Singleton managing loaded Z-Image pipeline with thread-safe loading"""
+class ImageModelManager:
+    """Singleton managing image pipelines (generation + editing) with on-demand loading."""
 
-    _instance: Optional["ImagePipelineManager"] = None
-    _pipeline: Optional["ZImagePipeline"] = None  # type: ignore
-    _device: str = "cuda" if DIFFUSERS_AVAILABLE and torch.cuda.is_available() else "cpu"  # type: ignore
+    _instance: Optional["ImageModelManager"] = None
+    _pipelines: dict[str, Any] = {}
+    _refcounts: dict[str, int] = {}
+    _model_configs: dict[str, Any] = {}  # ImageModelConfig | ImageEditModelConfig
+    _device: str = "cuda" if DIFFUSERS_AVAILABLE and torch.cuda.is_available() else "cpu"
     _lock: threading.Lock = threading.Lock()
 
-    def __new__(cls):
+    def __new__(cls) -> "ImageModelManager":
         if cls._instance is None:
             cls._instance = super().__new__(cls)
+            cls._instance._pipelines = {}
+            cls._instance._refcounts = {}
+            cls._instance._model_configs = {}
         return cls._instance
 
-    def load_pipeline(self, model_path: str) -> None:
-        """Load Z-Image pipeline if not already loaded (thread-safe)"""
+    def register(self, model_id: str, model_config: Any) -> None:
+        """Register a model config at startup."""
+        self._model_configs[model_id] = model_config
+
+    def is_loaded(self, model_id: str) -> bool:
+        """True if pipeline is currently in memory."""
+        return model_id in self._pipelines
+
+    def is_capable(self, model_id: str) -> bool:
+        """True if model config is registered."""
+        return model_id in self._model_configs
+
+    def acquire(self, model_id: str) -> Any:
+        """Get pipeline with refcount increment. Loads on demand. OOM evicts others."""
+        with self._lock:
+            if model_id not in self._model_configs:
+                raise RuntimeError(f"Model '{model_id}' not registered")
+
+            if model_id not in self._pipelines:
+                try:
+                    self._load(model_id)
+                except (RuntimeError, Exception) as e:
+                    if "out of memory" in str(e).lower() or (
+                        DIFFUSERS_AVAILABLE and isinstance(e, torch.cuda.OutOfMemoryError)
+                    ):
+                        self._unload_all_except(model_id)
+                        self._load(model_id)  # Retry once; if still OOM, let it raise
+                    else:
+                        raise
+
+            self._refcounts[model_id] = self._refcounts.get(model_id, 0) + 1
+            return self._pipelines[model_id]
+
+    def release(self, model_id: str) -> None:
+        """Decrement refcount after pipeline use."""
+        with self._lock:
+            if model_id in self._refcounts:
+                self._refcounts[model_id] = max(0, self._refcounts[model_id] - 1)
+
+    def _load(self, model_id: str) -> None:
+        """Load the appropriate pipeline based on config type."""
         if not DIFFUSERS_AVAILABLE:
             raise RuntimeError(
-                "Image generation dependencies not installed. "
+                "Image dependencies not installed. "
                 "Install with: pip install -e '.[image]' or poetry install --extras image"
             )
 
-        if self._pipeline is None:
-            with self._lock:
-                # Double-check after acquiring lock
-                if self._pipeline is None:
-                    dtype = torch.bfloat16 if self._device == "cuda" else torch.float32
-                    print(f"[Image Generation] Loading model: {model_path}")
-                    print(f"[Image Generation] Device: {self._device}, dtype: {dtype}")
+        from src.config import ImageEditModelConfig
 
-                    try:
-                        self._pipeline = ZImagePipeline.from_pretrained(
-                            model_path,
-                            torch_dtype=dtype,
-                            low_cpu_mem_usage=True,
-                        )
-                        self._pipeline.to(self._device)  # type: ignore[union-attr]
-                        print("[Image Generation] Model loaded and ready!")
-                    except torch.cuda.OutOfMemoryError as e:
-                        print(f"[Image Generation] CUDA OOM during model loading: {e}")
-                        raise RuntimeError("GPU out of memory. Cannot load image generation model.") from e
-                    except Exception as e:
-                        print(f"[Image Generation] Failed to load model: {e}")
-                        raise RuntimeError(f"Failed to load image generation model: {str(e)}") from e
+        model_config = self._model_configs[model_id]
+        dtype = torch.bfloat16 if self._device == "cuda" else torch.float32
+        print(f"[ImageModelManager] Loading {model_id} from {model_config.local_path}")
+        print(f"[ImageModelManager] Device: {self._device}, dtype: {dtype}")
 
-    def is_loaded(self) -> bool:
-        """Check if pipeline is loaded and ready"""
-        return self._pipeline is not None
+        try:
+            if isinstance(model_config, ImageEditModelConfig):
+                from diffusers import QwenImageEditPlusPipeline
 
-    def get_pipeline(self) -> ZImagePipeline:
-        """Get loaded pipeline"""
-        if self._pipeline is None:
-            raise RuntimeError("Pipeline not loaded. Call load_pipeline() first.")
-        return self._pipeline
+                pipeline = QwenImageEditPlusPipeline.from_pretrained(
+                    model_config.local_path,
+                    torch_dtype=dtype,
+                    low_cpu_mem_usage=True,
+                )
+            else:
+                pipeline = ZImagePipeline.from_pretrained(
+                    model_config.local_path,
+                    torch_dtype=dtype,
+                    low_cpu_mem_usage=True,
+                )
+            pipeline.to(self._device)
+            self._pipelines[model_id] = pipeline
+            self._refcounts[model_id] = 0
+            print(f"[ImageModelManager] {model_id} loaded and ready!")
+        except torch.cuda.OutOfMemoryError as e:
+            print(f"[ImageModelManager] CUDA OOM loading {model_id}: {e}")
+            raise
+        except Exception as e:
+            print(f"[ImageModelManager] Failed to load {model_id}: {e}")
+            raise RuntimeError(f"Failed to load model {model_id}: {e}") from e
+
+    def _unload_all_except(self, keep_model_id: str) -> None:
+        """Unload all pipelines except the one we want to load. Skips in-use pipelines."""
+        for mid in list(self._pipelines.keys()):
+            if mid == keep_model_id:
+                continue
+            if self._refcounts.get(mid, 0) > 0:
+                print(f"[ImageModelManager] Skipping unload of {mid} (refcount={self._refcounts[mid]})")
+                continue
+            print(f"[ImageModelManager] Unloading {mid} to free memory")
+            del self._pipelines[mid]
+            self._refcounts.pop(mid, None)
+
+        if DIFFUSERS_AVAILABLE and torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
 
 def generate_image(
@@ -155,3 +214,61 @@ def generate_image(
         # Clear CUDA cache to prevent memory accumulation
         if DIFFUSERS_AVAILABLE and torch.cuda.is_available():  # type: ignore
             torch.cuda.empty_cache()  # type: ignore
+
+
+def edit_image(
+    pipeline: Any,
+    images: list["Image.Image"],
+    prompt: str,
+    num_images: int = 1,
+    seed: int = -1,
+) -> list[str]:
+    """
+    Edit image(s) and return list of base64-encoded PNGs.
+
+    Args:
+        pipeline: QwenImageEditPlusPipeline instance
+        images: Input images to edit
+        prompt: Edit instruction
+        num_images: Number of output images
+        seed: Random seed (-1 for random)
+
+    Returns:
+        List of base64-encoded PNG image strings
+    """
+    if not DIFFUSERS_AVAILABLE:
+        raise RuntimeError(
+            "Image dependencies not installed. "
+            "Install with: pip install -e '.[image]' or poetry install --extras image"
+        )
+
+    try:
+        generator = None
+        if seed >= 0:
+            generator = torch.Generator(device=pipeline.device).manual_seed(seed)
+
+        result = pipeline(
+            image=images,
+            prompt=prompt,
+            negative_prompt=" ",
+            num_inference_steps=40,
+            guidance_scale=1.0,
+            true_cfg_scale=4.0,
+            num_images_per_prompt=num_images,
+            generator=generator,
+        )
+
+        output_images = []
+        for img in result.images:
+            with io.BytesIO() as buffer:
+                img.save(buffer, format="PNG")
+                output_images.append(base64.b64encode(buffer.getvalue()).decode("utf-8"))
+
+        return output_images
+
+    except torch.cuda.OutOfMemoryError as e:
+        print(f"[Image Edit] CUDA OOM during editing: {e}")
+        raise RuntimeError("GPU out of memory during image editing.") from e
+    finally:
+        if DIFFUSERS_AVAILABLE and torch.cuda.is_available():
+            torch.cuda.empty_cache()
