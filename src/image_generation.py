@@ -135,7 +135,10 @@ class ImageModelManager:
                 print(f"[ImageModelManager] Skipping unload of {mid} (refcount={self._refcounts[mid]})")
                 continue
             print(f"[ImageModelManager] Unloading {mid} to free memory")
-            del self._pipelines[mid]
+            pipeline = self._pipelines.pop(mid)
+            if DIFFUSERS_AVAILABLE and torch.cuda.is_available():
+                pipeline.to("cpu")
+            del pipeline
             self._refcounts.pop(mid, None)
 
         if DIFFUSERS_AVAILABLE and torch.cuda.is_available():

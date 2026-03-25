@@ -30,6 +30,8 @@ MAX_DIMENSION = 2048
 MAX_STEPS = 50
 MIN_STEPS = 1
 DEFAULT_Z_IMAGE_TURBO_STEPS = 9
+MAX_IMAGE_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
+MAX_IMAGE_PIXELS = 2048 * 2048  # ~4 megapixels
 
 
 # Helper functions
@@ -289,7 +291,20 @@ async def edit_image_openai(
     for item in form.getlist("image"):
         if hasattr(item, 'read'):  # UploadFile
             contents = await item.read()
-            img = PILImage.open(io.BytesIO(contents)).convert("RGB")
+            if len(contents) > MAX_IMAGE_FILE_SIZE:
+                raise HTTPException(
+                    status_code=HTTPStatus.BAD_REQUEST,
+                    detail=f"Image file too large (max {MAX_IMAGE_FILE_SIZE // (1024 * 1024)}MB)"
+                )
+            try:
+                img = PILImage.open(io.BytesIO(contents)).convert("RGB")
+            except Exception:
+                raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Invalid image file")
+            if img.width * img.height > MAX_IMAGE_PIXELS:
+                raise HTTPException(
+                    status_code=HTTPStatus.BAD_REQUEST,
+                    detail=f"Image too large ({img.width}x{img.height}), max {MAX_IMAGE_PIXELS} pixels"
+                )
             input_images.append(img)
 
     if not input_images:
