@@ -20,7 +20,14 @@ class ImageModelConfig(BaseModel):
     allowed_paths: list[str]
 
 
-ModelConfig = TextModelConfig | ImageModelConfig
+class ImageEditModelConfig(BaseModel):
+    type: Literal["image-edit"] = "image-edit"
+    id: str
+    local_path: str
+    allowed_paths: list[str]
+
+
+ModelConfig = TextModelConfig | ImageModelConfig | ImageEditModelConfig
 
 
 class _Config:
@@ -51,6 +58,8 @@ class _Config:
                 # Pydantic will automatically discriminate based on 'type' field
                 if model_data.get("type") == "image":
                     model_config = ImageModelConfig(**model_data)
+                elif model_data.get("type") == "image-edit":
+                    model_config = ImageEditModelConfig(**model_data)
                 else:
                     model_config = TextModelConfig(**model_data)
                 self.MODEL_CONFIGS[model_config.id] = model_config

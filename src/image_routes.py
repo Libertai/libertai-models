@@ -1,3 +1,5 @@
+import asyncio
+import io
 import random
 import time
 from http import HTTPStatus
@@ -8,21 +10,28 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
 from src.api_keys import KeysManager
-from src.config import ImageModelConfig, config
-from src.image_generation import ImagePipelineManager, generate_image
+from src.config import ImageEditModelConfig, ImageModelConfig, config
+from src.image_generation import ImageModelManager, edit_image, generate_image
 from src.interfaces.usage import ImageUsage, ImageUsageFullData, UserContext
 from src.usage import report_usage_event_task
 
 router = APIRouter(tags=["Image Generation"])
 security = HTTPBearer()
 keys_manager = KeysManager()
-pipeline_manager = ImagePipelineManager()
+image_manager = ImageModelManager()
+
+# Register image model configs
+for _model_id, _model_config in config.MODEL_CONFIGS.items():
+    if isinstance(_model_config, (ImageModelConfig, ImageEditModelConfig)):
+        image_manager.register(_model_id, _model_config)
 
 # Constants
 MAX_DIMENSION = 2048
 MAX_STEPS = 50
 MIN_STEPS = 1
 DEFAULT_Z_IMAGE_TURBO_STEPS = 9
+MAX_IMAGE_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
+MAX_IMAGE_PIXELS = 2048 * 2048  # ~4 megapixels
 
 
 # Helper functions
@@ -56,7 +65,7 @@ def validate_cfg_scale(cfg_scale: float) -> None:
         raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="cfg_scale must be non-negative")
 
 
-def validate_model_and_endpoint(model_name: str, endpoint: str, token: str) -> ImageModelConfig:
+def validate_model_and_endpoint(model_name: str, endpoint: str, token: str) -> ImageModelConfig | ImageEditModelConfig:
     """Validate API key, model existence, model type, and endpoint path"""
     # Auth validation
     if not keys_manager.key_exists(token):
@@ -68,7 +77,7 @@ def validate_model_and_endpoint(model_name: str, endpoint: str, token: str) -> I
 
     # Model type
     model_config = config.MODEL_CONFIGS[model_name]
-    if not isinstance(model_config, ImageModelConfig):
+    if not isinstance(model_config, (ImageModelConfig, ImageEditModelConfig)):
         raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=f"Model '{model_name}' is not an image model")
 
     # Endpoint path
@@ -121,6 +130,9 @@ class OpenAIImageRequest(BaseModel):
         extra = "allow"
 
 
+MAX_INPUT_IMAGES = 4
+
+
 class ImageData(BaseModel):
     b64_json: str
 
@@ -165,7 +177,7 @@ async def generate_image_openai(
     payment_requirements = raw_request.headers.get("x-payment-requirements") or None
 
     # Validate model and endpoint
-    model_config = validate_model_and_endpoint(request.model, "v1/images/generations", token)
+    validate_model_and_endpoint(request.model, "v1/images/generations", token)
 
     # Validate parameters
     if request.n < 1 or request.n > MAX_IMAGES:
@@ -189,23 +201,27 @@ async def generate_image_openai(
     validate_dimensions(width, height)
 
     try:
-        # Load pipeline if not already loaded
-        pipeline_manager.load_pipeline(model_config.local_path)
-        pipeline = pipeline_manager.get_pipeline()
+        def _blocking_generate():
+            pipeline = image_manager.acquire(request.model)
+            try:
+                results = []
+                for _ in range(request.n):
+                    image_b64 = generate_image(
+                        pipeline=pipeline,
+                        prompt=request.prompt,
+                        width=width,
+                        height=height,
+                        steps=DEFAULT_Z_IMAGE_TURBO_STEPS,
+                        guidance_scale=0.0,
+                        remove_background=request.remove_background,
+                    )
+                    results.append(ImageData(b64_json=image_b64))
+                return results
+            finally:
+                image_manager.release(request.model)
 
-        # Generate n images
-        images = []
-        for _ in range(request.n):
-            image_b64 = generate_image(
-                pipeline=pipeline,
-                prompt=request.prompt,
-                width=width,
-                height=height,
-                steps=DEFAULT_Z_IMAGE_TURBO_STEPS,  # Z-Image-Turbo optimal
-                guidance_scale=0.0,  # Turbo doesn't need CFG
-                remove_background=request.remove_background,
-            )
-            images.append(ImageData(b64_json=image_b64))
+        loop = asyncio.get_running_loop()
+        images = await loop.run_in_executor(None, _blocking_generate)
 
         # Track usage
         track_usage(
@@ -224,12 +240,133 @@ async def generate_image_openai(
         )
 
     except RuntimeError as e:
-        # RuntimeError raised from our code (CUDA OOM, model loading failures)
         print(f"Error generating image: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         print(f"Unexpected error generating image: {e}")
         raise HTTPException(status_code=500, detail=f"Error generating image: {str(e)}")
+
+
+@router.post("/v1/images/edits", response_model=OpenAIImageResponse)
+async def edit_image_openai(
+    raw_request: Request,
+    background_tasks: BackgroundTasks,
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)],
+):
+    """OpenAI-compatible image editing endpoint (multipart/form-data)"""
+    token = credentials.credentials
+
+    # Parse multipart form data
+    form = await raw_request.form()
+
+    prompt = form.get("prompt")
+    if not prompt or not isinstance(prompt, str):
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="prompt is required")
+
+    model_name = form.get("model")
+    if not model_name or not isinstance(model_name, str):
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="model is required")
+
+    n_raw = form.get("n", "1")
+    try:
+        n = int(str(n_raw))
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="n must be an integer")
+
+    seed_raw = form.get("seed", "-1")
+    try:
+        seed = int(str(seed_raw))
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="seed must be an integer")
+
+    response_format = form.get("response_format", "b64_json")
+    if response_format != "b64_json":
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Only b64_json format is supported")
+
+    # Validate
+    validate_prompt(prompt)
+    validate_model_and_endpoint(model_name, "v1/images/edits", token)
+
+    if n < 1 or n > MAX_IMAGES:
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=f"n must be between 1 and {MAX_IMAGES}")
+
+    # Extract images from form (supports multiple files under "image" key)
+    from PIL import Image as PILImage
+
+    # Guard against decompression bombs
+    PILImage.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
+
+    input_images: list[PILImage.Image] = []
+    for item in form.getlist("image"):
+        if hasattr(item, 'read'):  # UploadFile
+            # Read at most MAX_IMAGE_FILE_SIZE + 1 to detect oversized uploads without loading full file
+            contents = await item.read(MAX_IMAGE_FILE_SIZE + 1)
+            if len(contents) > MAX_IMAGE_FILE_SIZE:
+                raise HTTPException(
+                    status_code=HTTPStatus.BAD_REQUEST,
+                    detail=f"Image file too large (max {MAX_IMAGE_FILE_SIZE // (1024 * 1024)}MB)"
+                )
+            try:
+                raw_img = PILImage.open(io.BytesIO(contents))
+                raw_img.verify()  # Check headers without full decode
+                # Re-open after verify (verify leaves file in unusable state)
+                img = PILImage.open(io.BytesIO(contents)).convert("RGB")
+            except Exception:
+                raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Invalid image file")
+            input_images.append(img)
+
+    if not input_images:
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="At least one image is required")
+
+    if len(input_images) > MAX_INPUT_IMAGES:
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail=f"Maximum {MAX_INPUT_IMAGES} input images allowed"
+        )
+
+    payment_payload = raw_request.headers.get("x-payment") or None
+    payment_requirements = raw_request.headers.get("x-payment-requirements") or None
+
+    try:
+        def _blocking_edit():
+            pipeline = image_manager.acquire(model_name)
+            try:
+                return edit_image(
+                    pipeline=pipeline,
+                    images=input_images,
+                    prompt=prompt,
+                    num_images=n,
+                    seed=seed,
+                )
+            finally:
+                image_manager.release(model_name)
+
+        loop = asyncio.get_running_loop()
+        result_images = await loop.run_in_executor(None, _blocking_edit)
+
+        images = [ImageData(b64_json=b64) for b64 in result_images]
+
+        track_usage(
+            token,
+            model_name,
+            "v1/images/edits",
+            background_tasks,
+            image_count=n,
+            payment_payload=payment_payload,
+            payment_requirements=payment_requirements,
+        )
+
+        return OpenAIImageResponse(
+            created=int(time.time()),
+            data=images,
+        )
+
+    except RuntimeError as e:
+        print(f"Error editing image: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        print(f"Unexpected error editing image: {e}")
+        raise HTTPException(status_code=500, detail=f"Error editing image: {str(e)}")
 
 
 @router.post("/sdapi/v1/txt2img", response_model=A1111Response)
@@ -245,7 +382,7 @@ async def generate_image_a1111(
     payment_requirements = raw_request.headers.get("x-payment-requirements") or None
 
     # Validate model and endpoint
-    model_config = validate_model_and_endpoint(request.model, "sdapi/v1/txt2img", token)
+    validate_model_and_endpoint(request.model, "sdapi/v1/txt2img", token)
 
     # Validate input parameters
     validate_prompt(request.prompt)
@@ -253,25 +390,28 @@ async def generate_image_a1111(
     validate_steps(request.steps)
     validate_cfg_scale(request.cfg_scale)
 
+    # Create seed if none is passed
+    seed = request.seed if request.seed >= 0 else random.randint(0, 2147483647)
+
     try:
-        # Load pipeline if not already loaded
-        pipeline_manager.load_pipeline(model_config.local_path)
-        pipeline = pipeline_manager.get_pipeline()
+        def _blocking_generate():
+            pipeline = image_manager.acquire(request.model)
+            try:
+                return generate_image(
+                    pipeline=pipeline,
+                    prompt=request.prompt,
+                    width=request.width,
+                    height=request.height,
+                    steps=request.steps,
+                    guidance_scale=request.cfg_scale,
+                    seed=seed,
+                    remove_background=request.remove_background,
+                )
+            finally:
+                image_manager.release(request.model)
 
-        # Create seed if none is passed
-        seed = request.seed if request.seed >= 0 else random.randint(0, 2147483647)
-
-        # Generate image (note: Z-Image doesn't support negative prompts natively)
-        image_b64 = generate_image(
-            pipeline=pipeline,
-            prompt=request.prompt,
-            width=request.width,
-            height=request.height,
-            steps=request.steps,
-            guidance_scale=request.cfg_scale,
-            seed=seed,
-            remove_background=request.remove_background,
-        )
+        loop = asyncio.get_running_loop()
+        image_b64 = await loop.run_in_executor(None, _blocking_generate)
 
         # Track usage
         track_usage(
@@ -299,7 +439,6 @@ async def generate_image_a1111(
         )
 
     except RuntimeError as e:
-        # RuntimeError raised from our code (CUDA OOM, model loading failures)
         print(f"Error generating image: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
