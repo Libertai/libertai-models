@@ -67,7 +67,7 @@ class ImageModelManager:
             if model_id not in self._pipelines:
                 try:
                     self._load(model_id)
-                except (RuntimeError, Exception) as e:
+                except Exception as e:
                     if "out of memory" in str(e).lower() or (
                         DIFFUSERS_AVAILABLE and isinstance(e, torch.cuda.OutOfMemoryError)
                     ):
