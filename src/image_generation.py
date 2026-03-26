@@ -130,13 +130,17 @@ class ImageModelManager:
                     torch_dtype=dtype,
                     low_cpu_mem_usage=True,
                 )
+                # Move one component at a time to GPU during forward pass.
+                # The full model (~55GB) doesn't fit in VRAM at once, but the
+                # transformer (~40GB) fits alone and stays on GPU for all denoising steps.
+                pipeline.enable_model_cpu_offload()
             else:
                 pipeline = ZImagePipeline.from_pretrained(
                     model_config.local_path,
                     torch_dtype=dtype,
                     low_cpu_mem_usage=True,
                 )
-            pipeline.to(self._device)
+                pipeline.to(self._device)
             self._pipelines[model_id] = pipeline
             self._refcounts[model_id] = 0
             print(f"[ImageModelManager] {model_id} loaded and ready!")
@@ -275,7 +279,7 @@ def edit_image(
             image=images,
             prompt=prompt,
             negative_prompt=" ",
-            num_inference_steps=40,
+            num_inference_steps=20,
             guidance_scale=1.0,
             true_cfg_scale=4.0,
             num_images_per_prompt=num_images,
