@@ -209,5 +209,7 @@ async def proxy_request(
                 media_type=response.headers.get("Content-Type", ""),
             )
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error forwarding request: {type(e).__name__}: {e}")
