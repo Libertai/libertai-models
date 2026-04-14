@@ -1,4 +1,5 @@
 import json
+import logging
 from http import HTTPStatus
 from typing import Annotated
 
@@ -13,6 +14,8 @@ from src.config import ImageEditModelConfig, ImageModelConfig, TextModelConfig, 
 from src.image_generation import ImageModelManager
 from src.interfaces.usage import TextUsageFullData, UserContext
 from src.usage import report_usage_event_task, extract_usage_info_from_raw, extract_usage_info
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Proxy service"])
 keys_manager = KeysManager()
@@ -84,6 +87,7 @@ async def proxy_health(request: Request, model_name: str):
     try:
         response: httpx.Response = await client.get(url, headers=headers)
     except Exception as e:
+        logger.exception("proxy health forward to %s failed", url)
         raise HTTPException(status_code=500, detail=f"Error forwarding request: {type(e).__name__}: {e}")
 
     return Response(
@@ -212,4 +216,5 @@ async def proxy_request(
     except HTTPException:
         raise
     except Exception as e:
+        logger.exception("proxy forward to %s failed", url)
         raise HTTPException(status_code=500, detail=f"Error forwarding request: {type(e).__name__}: {e}")
