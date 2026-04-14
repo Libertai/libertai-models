@@ -157,7 +157,7 @@ async def proxy_request(
                 )
             raise HTTPException(status_code=response.status_code, detail=detail)
 
-        is_streaming_response = response.headers.get("content-type", "") == "text/event-stream"
+        is_streaming_response = "text/event-stream" in response.headers.get("content-type", "")
 
         if is_streaming_response:
 
