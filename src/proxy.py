@@ -142,6 +142,21 @@ async def proxy_request(
     # Clean up headers
     headers.pop("host", None)
 
+    # Force vLLM/OpenAI servers to emit a `usage` object on the final SSE chunk
+    # so streaming usage accounting works. llama.cpp ignores stream_options.
+    if full_path in ("v1/chat/completions", "v1/completions"):
+        try:
+            body_json = json.loads(body)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            body_json = None
+        if isinstance(body_json, dict) and body_json.get("stream") is True:
+            stream_options = body_json.get("stream_options") or {}
+            if not stream_options.get("include_usage"):
+                stream_options["include_usage"] = True
+                body_json["stream_options"] = stream_options
+                body = json.dumps(body_json).encode()
+                headers.pop("content-length", None)
+
     url = f"{model_config.url}/{full_path}"
 
     try:

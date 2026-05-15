@@ -1,11 +1,43 @@
 import json
 import re
-from typing import Any
+from typing import Any, Iterator
 
 import httpx
 
 from src.config import config
 from src.interfaces.usage import ImageUsageFullData, TextUsageFullData, Usage, UserContext
+
+
+def _iter_json_at_key(text: str, key: str) -> Iterator[dict]:
+    """Yield each `"key": {...}` value as a parsed dict. Handles nested braces."""
+    pattern = re.compile(rf'"{re.escape(key)}"\s*:\s*(?=\{{)')
+    for match in pattern.finditer(text):
+        start = match.end()
+        depth = 0
+        in_str = False
+        escape = False
+        for i in range(start, len(text)):
+            c = text[i]
+            if in_str:
+                if escape:
+                    escape = False
+                elif c == "\\":
+                    escape = True
+                elif c == '"':
+                    in_str = False
+                continue
+            if c == '"':
+                in_str = True
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        yield json.loads(text[start:i + 1])
+                    except json.JSONDecodeError:
+                        pass
+                    break
 
 
 async def report_usage_event_task(usage: TextUsageFullData | ImageUsageFullData):
@@ -39,52 +71,56 @@ def extract_usage_info_from_raw(raw_data: bytes, context: UserContext) -> Usage:
         raise ValueError("Unable to decode raw response content")
 
     if context.endpoint == "v1/messages":
-        # Claude API format: usage is in `message_start` and `message_delta` SSE events,
-        # or directly in the top-level response object
+        # Claude/Anthropic streaming: `message_start` carries initial usage (output_tokens=0
+        # or 1) and `message_delta` carries the final cumulative usage. Both report
+        # input_tokens, so SUMMING would double-count. Take the max across all events.
         input_tokens = 0
         output_tokens = 0
+        seen = False
+        for usage_json in _iter_json_at_key(text, "usage"):
+            seen = True
+            input_tokens = max(input_tokens, int(usage_json.get("input_tokens", 0)))
+            output_tokens = max(output_tokens, int(usage_json.get("output_tokens", 0)))
 
-        # Look for all usage objects in the streamed events
-        for usage_match in re.finditer(r'"usage"\s*:\s*({[^}]+})', text):
-            try:
-                usage_json = json.loads(usage_match.group(1))
-                input_tokens += int(usage_json.get("input_tokens", 0))
-                output_tokens += int(usage_json.get("output_tokens", 0))
-            except (json.JSONDecodeError, ValueError):
-                continue
-
-        if input_tokens > 0 or output_tokens > 0:
+        if seen:
             return Usage(input_tokens=input_tokens, output_tokens=output_tokens, cached_tokens=0)
 
         raise ValueError("No usage data found in Claude API streaming response")
 
     elif context.endpoint == "v1/responses":
-        # Responses API format: usage at top level with input_tokens, output_tokens, total_tokens
-        responses_match = re.search(r'"usage"\s*:\s*({[^}]+})', text)
-        if responses_match:
-            try:
-                usage_json = json.loads(responses_match.group(1))
-                return Usage(
-                    input_tokens=int(usage_json.get("input_tokens", 0)),
-                    output_tokens=int(usage_json.get("output_tokens", 0)),
-                    cached_tokens=0,
-                )
-            except (json.JSONDecodeError, ValueError) as e:
-                raise ValueError(f"Failed to parse usage JSON: {e}")
+        # Responses API streaming: final `response.completed` event carries usage. Object may
+        # be nested (e.g. input_tokens_details), so we need a brace-aware extractor.
+        found = None
+        for usage_json in _iter_json_at_key(text, "usage"):
+            if "input_tokens" in usage_json or "output_tokens" in usage_json:
+                found = usage_json
+        if found is not None:
+            return Usage(
+                input_tokens=int(found.get("input_tokens", 0)),
+                output_tokens=int(found.get("output_tokens", 0)),
+                cached_tokens=0,
+            )
+        raise ValueError("No usage data found in Responses streaming response")
 
     elif context.endpoint in ["v1/chat/completions", "v1/completions"]:
-        # Look for the embedded usage JSON object
-        timings_match = re.search(r'"timings"\s*:\s*({.*?})', text)
-        if timings_match:
-            try:
-                usage_json = json.loads(timings_match.group(1))
+        # vLLM / OpenAI standard: final SSE chunk has {"usage": {"prompt_tokens": .., "completion_tokens": .., "total_tokens": ..}}
+        # when stream_options.include_usage=true (we force-inject this in proxy).
+        # May include nested prompt_tokens_details on newer vLLM, so brace-aware extract.
+        for usage_json in _iter_json_at_key(text, "usage"):
+            if "prompt_tokens" in usage_json or "completion_tokens" in usage_json:
                 return Usage(
-                    input_tokens=int(usage_json.get("cache_n", 0)) + int(usage_json.get("prompt_n", 0)),
-                    output_tokens=int(usage_json.get("predicted_n", 0)),
+                    input_tokens=int(usage_json.get("prompt_tokens", 0)),
+                    output_tokens=int(usage_json.get("completion_tokens", 0)),
                     cached_tokens=0,
                 )
-            except Exception as e:
-                raise ValueError(f"Failed to parse usage JSON: {e}")
+
+        # llama.cpp: usage is embedded as a "timings" object in the final chunk
+        for timings_json in _iter_json_at_key(text, "timings"):
+            return Usage(
+                input_tokens=int(timings_json.get("cache_n", 0)) + int(timings_json.get("prompt_n", 0)),
+                output_tokens=int(timings_json.get("predicted_n", 0)),
+                cached_tokens=0,
+            )
 
     elif context.endpoint == "completions":
         # Look for raw keys like: tokens_evaluated: 123, tokens_predicted: 456
