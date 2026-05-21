@@ -27,7 +27,14 @@ class ImageEditModelConfig(BaseModel):
     allowed_paths: list[str]
 
 
-ModelConfig = TextModelConfig | ImageModelConfig | ImageEditModelConfig
+class EmbeddingModelConfig(BaseModel):
+    type: Literal["embedding"] = "embedding"
+    id: str
+    url: str
+    allowed_paths: list[str]
+
+
+ModelConfig = TextModelConfig | ImageModelConfig | ImageEditModelConfig | EmbeddingModelConfig
 
 
 class _Config:
@@ -60,6 +67,8 @@ class _Config:
                     model_config = ImageModelConfig(**model_data)
                 elif model_data.get("type") == "image-edit":
                     model_config = ImageEditModelConfig(**model_data)
+                elif model_data.get("type") == "embedding":
+                    model_config = EmbeddingModelConfig(**model_data)
                 else:
                     model_config = TextModelConfig(**model_data)
                 self.MODEL_CONFIGS[model_config.id] = model_config
