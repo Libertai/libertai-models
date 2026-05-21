@@ -10,7 +10,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
 from src.api_keys import KeysManager
-from src.config import ImageEditModelConfig, ImageModelConfig, TextModelConfig, config
+from src.config import EmbeddingModelConfig, ImageEditModelConfig, ImageModelConfig, TextModelConfig, config
 from src.image_generation import ImageModelManager
 from src.interfaces.usage import TextUsageFullData, UserContext
 from src.usage import report_usage_event_task, extract_usage_info_from_raw, extract_usage_info
@@ -57,8 +57,8 @@ async def proxy_health(request: Request, model_name: str):
 
     model_config = config.MODEL_CONFIGS[model_name]
 
-    # For image models, check if the pipeline is loaded
-    if not isinstance(model_config, TextModelConfig):
+    # For image models, check if the in-process pipeline is loaded
+    if isinstance(model_config, (ImageModelConfig, ImageEditModelConfig)):
         if _image_manager.is_loaded(model_name):
             return Response(
                 content=json.dumps({"status": "ok"}).encode(),
@@ -78,7 +78,7 @@ async def proxy_health(request: Request, model_name: str):
                 media_type="application/json",
             )
 
-    # For text models, proxy to llamacpp /health endpoint
+    # For text and embedding models, proxy to the llamacpp /health endpoint
     url = f"{model_config.url}/health"
 
     headers = dict(request.headers)
@@ -118,8 +118,10 @@ async def proxy_request(
 
     model_config = config.MODEL_CONFIGS[model_name]
 
-    if not isinstance(model_config, TextModelConfig):
-        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="This endpoint is only for text models")
+    if not isinstance(model_config, (TextModelConfig, EmbeddingModelConfig)):
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST, detail="This endpoint is only for text and embedding models"
+        )
 
     if full_path not in model_config.allowed_paths:
         raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Invalid inference path")

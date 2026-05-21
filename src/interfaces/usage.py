@@ -6,6 +6,7 @@ from pydantic import BaseModel
 class InferenceCallType(str, Enum):
     text = "text"
     image = "image"
+    embedding = "embedding"
 
 
 class UserContext(BaseModel):

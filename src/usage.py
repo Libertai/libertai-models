@@ -168,6 +168,14 @@ def extract_usage_info(data: dict[str, Any], context: UserContext) -> Usage:
             output_tokens=int(usage_data.get("completion_tokens", 0)),
             cached_tokens=0,
         )
+    elif context.endpoint == "v1/embeddings":
+        # Embeddings are input-only: usage carries prompt_tokens (== total_tokens), no completion.
+        usage_data = data.get("usage", {})
+        return Usage(
+            input_tokens=int(usage_data.get("prompt_tokens", 0)),
+            output_tokens=0,
+            cached_tokens=0,
+        )
     elif context.endpoint == "completions":
         return Usage(
             input_tokens=int(data.get("tokens_evaluated", 0)),
