@@ -1,0 +1,8 @@
+{
+  "type": "audio",
+  "id": "kokoro",
+  "local_path": "hexgrad/Kokoro-82M",
+  "allowed_paths": ["v1/audio/speech"],
+  "default_voice": "af_heart",
+  "lang_code": "a"
+}
