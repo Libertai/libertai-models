@@ -7,6 +7,7 @@ class InferenceCallType(str, Enum):
     text = "text"
     image = "image"
     embedding = "embedding"
+    audio = "audio"
 
 
 class UserContext(BaseModel):
@@ -29,11 +30,20 @@ class ImageUsage(BaseModel):
     type: InferenceCallType = InferenceCallType.image
 
 
+class AudioUsage(BaseModel):
+    input_tokens: int  # character count of the input text
+    type: InferenceCallType = InferenceCallType.audio
+
+
 class TextUsageFullData(UserContext, TextUsage):
     pass
 
 
 class ImageUsageFullData(UserContext, ImageUsage):
+    pass
+
+
+class AudioUsageFullData(UserContext, AudioUsage):
     pass
 
 

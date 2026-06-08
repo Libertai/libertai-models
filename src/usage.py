@@ -5,7 +5,7 @@ from typing import Any, Iterator
 import httpx
 
 from src.config import config
-from src.interfaces.usage import ImageUsageFullData, TextUsageFullData, Usage, UserContext
+from src.interfaces.usage import AudioUsageFullData, ImageUsageFullData, TextUsageFullData, Usage, UserContext
 
 
 def _iter_json_at_key(text: str, key: str) -> Iterator[dict]:
@@ -40,7 +40,7 @@ def _iter_json_at_key(text: str, key: str) -> Iterator[dict]:
                     break
 
 
-async def report_usage_event_task(usage: TextUsageFullData | ImageUsageFullData):
+async def report_usage_event_task(usage: TextUsageFullData | ImageUsageFullData | AudioUsageFullData):
     print(f"Collecting usage {usage}")
     try:
         timeout = httpx.Timeout(timeout=30.0)
