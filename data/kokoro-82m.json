@@ -1,6 +1,6 @@
 {
   "type": "audio",
-  "id": "kokoro",
+  "id": "kokoro-82m",
   "local_path": "hexgrad/Kokoro-82M",
   "allowed_paths": ["v1/audio/speech"],
   "default_voice": "af_heart",
