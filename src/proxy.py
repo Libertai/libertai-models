@@ -10,9 +10,17 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
 from src.api_keys import KeysManager
-from src.config import EmbeddingModelConfig, ImageEditModelConfig, ImageModelConfig, TextModelConfig, config
+from src.config import (
+    AudioModelConfig,
+    EmbeddingModelConfig,
+    ImageEditModelConfig,
+    ImageModelConfig,
+    TextModelConfig,
+    config,
+)
 from src.image_generation import ImageModelManager
 from src.interfaces.usage import TextUsageFullData, UserContext
+from src.tts_generation import TTSModelManager
 from src.usage import report_usage_event_task, extract_usage_info_from_raw, extract_usage_info
 
 logger = logging.getLogger(__name__)
@@ -44,6 +52,12 @@ for _model_id, _model_config in config.MODEL_CONFIGS.items():
     if isinstance(_model_config, (ImageModelConfig, ImageEditModelConfig)):
         _image_manager.register(_model_id, _model_config)
 
+# Register audio model configs with the TTS manager (singleton shared with tts_routes)
+_tts_manager = TTSModelManager()
+for _model_id, _model_config in config.MODEL_CONFIGS.items():
+    if isinstance(_model_config, AudioModelConfig):
+        _tts_manager.register(_model_id, _model_config)
+
 
 @router.on_event("shutdown")
 async def shutdown_event():
@@ -74,6 +88,29 @@ async def proxy_health(request: Request, model_name: str):
         else:
             return Response(
                 content=json.dumps({"status": "error", "detail": "Image model not registered"}).encode(),
+                status_code=503,
+                media_type="application/json",
+            )
+
+    # For audio models, check if the in-process TTS pipeline is loaded
+    if isinstance(model_config, AudioModelConfig):
+        if _tts_manager.is_loaded(model_name):
+            return Response(
+                content=json.dumps({"status": "ok"}).encode(),
+                status_code=200,
+                media_type="application/json",
+            )
+        elif _tts_manager.is_capable(model_name):
+            return Response(
+                content=json.dumps(
+                    {"status": "capable", "detail": "Model not loaded but can be loaded on demand"}
+                ).encode(),
+                status_code=202,
+                media_type="application/json",
+            )
+        else:
+            return Response(
+                content=json.dumps({"status": "error", "detail": "Audio model not registered"}).encode(),
                 status_code=503,
                 media_type="application/json",
             )
