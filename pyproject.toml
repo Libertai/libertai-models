@@ -29,18 +29,13 @@ image = [
     "onnxruntime (>=1.23.2,<2.0.0)"
 ]
 
-# Dedicated TTS instance only (not co-located with the image extra, whose transformers
-# range conflicts). torch is installed separately from the cu124 index at deploy time:
-# the default PyPI wheel is cu130, too new for the instance driver (535). transformers is
-# pinned because newer releases reference torch.float8_e8m0fnu (absent in torch 2.6) and
-# crash Kokoro's import.
-tts = [
-    "kokoro (>=0.9.0,<1.0.0)",
-    "transformers (==4.49.0)",
-    "soundfile (>=0.12.0,<1.0.0)",
-    "misaki[en] (>=0.9.0,<1.0.0)",
-    "numpy (>=1.26.0,<3.0.0)"
-]
+# TTS (Kokoro) deps are intentionally NOT declared as a poetry extra: they require
+# transformers==4.49.0, which conflicts with the `image` extra's transformers>=4.51.3
+# (poetry resolves a single version across all extras). TTS runs on a dedicated instance
+# that never installs the `image` extra, and the repo is `package-mode = false` (so
+# `pip install -e ".[tts]"` has no package to build anyway). The TTS deployment therefore
+# installs these explicitly via pip — see devops `deployment/install_kokoro.sh`:
+#   torch==2.6.0 (cu124 index), kokoro, transformers==4.49.0, soundfile, misaki[en], numpy
 
 
 [build-system]
