@@ -4,9 +4,9 @@ from typing import Any, Optional
 
 try:
     import numpy as np
-    import soundfile as sf
+    import soundfile as sf  # type: ignore
     import torch
-    from kokoro import KPipeline
+    from kokoro import KPipeline  # type: ignore
 
     KOKORO_AVAILABLE = True
 except ImportError:
