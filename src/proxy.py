@@ -52,11 +52,8 @@ for _model_id, _model_config in config.MODEL_CONFIGS.items():
     if isinstance(_model_config, (ImageModelConfig, ImageEditModelConfig)):
         _image_manager.register(_model_id, _model_config)
 
-# Register audio model configs with the TTS manager (singleton shared with tts_routes)
+# Audio model configs are registered in tts_routes; this is the same singleton instance
 _tts_manager = TTSModelManager()
-for _model_id, _model_config in config.MODEL_CONFIGS.items():
-    if isinstance(_model_config, AudioModelConfig):
-        _tts_manager.register(_model_id, _model_config)
 
 
 @router.on_event("shutdown")

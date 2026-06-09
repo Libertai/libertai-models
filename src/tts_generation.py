@@ -30,7 +30,6 @@ class TTSModelManager:
     _refcounts: dict[str, int] = {}
     _model_configs: dict[str, Any] = {}  # AudioModelConfig
     _inference_locks: dict[str, threading.Lock] = {}
-    _device: str = "cuda" if KOKORO_AVAILABLE and torch.cuda.is_available() else "cpu"
     _lock: threading.Lock = threading.Lock()
 
     def __new__(cls) -> "TTSModelManager":
@@ -62,6 +61,8 @@ class TTSModelManager:
             if self._refcounts.get(mid, 0) > 0:
                 continue
             del self._pipelines[mid]
+            if mid in self._inference_locks:
+                del self._inference_locks[mid]
         if KOKORO_AVAILABLE and torch.cuda.is_available():
             torch.cuda.empty_cache()
 
