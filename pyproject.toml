@@ -29,6 +29,14 @@ image = [
     "onnxruntime (>=1.23.2,<2.0.0)"
 ]
 
+# TTS (Kokoro) deps are intentionally NOT declared as a poetry extra: they require
+# transformers==4.49.0, which conflicts with the `image` extra's transformers>=4.51.3
+# (poetry resolves a single version across all extras). TTS runs on a dedicated instance
+# that never installs the `image` extra, and the repo is `package-mode = false` (so
+# `pip install -e ".[tts]"` has no package to build anyway). The TTS deployment therefore
+# installs these explicitly via pip — see devops `deployment/install_kokoro.sh`:
+#   torch==2.6.0 (cu124 index), kokoro, transformers==4.49.0, soundfile, misaki[en], numpy
+
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

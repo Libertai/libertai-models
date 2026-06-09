@@ -34,7 +34,18 @@ class EmbeddingModelConfig(BaseModel):
     allowed_paths: list[str]
 
 
-ModelConfig = TextModelConfig | ImageModelConfig | ImageEditModelConfig | EmbeddingModelConfig
+class AudioModelConfig(BaseModel):
+    type: Literal["audio"] = "audio"
+    id: str
+    local_path: str
+    allowed_paths: list[str]
+    default_voice: str
+    lang_code: str = "a"
+
+
+ModelConfig = (
+    TextModelConfig | ImageModelConfig | ImageEditModelConfig | EmbeddingModelConfig | AudioModelConfig
+)
 
 
 class _Config:
@@ -69,6 +80,8 @@ class _Config:
                     model_config = ImageEditModelConfig(**model_data)
                 elif model_data.get("type") == "embedding":
                     model_config = EmbeddingModelConfig(**model_data)
+                elif model_data.get("type") == "audio":
+                    model_config = AudioModelConfig(**model_data)
                 else:
                     model_config = TextModelConfig(**model_data)
                 self.MODEL_CONFIGS[model_config.id] = model_config
