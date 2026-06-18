@@ -8,6 +8,18 @@ from src.config import config
 from src.interfaces.usage import AudioUsageFullData, ImageUsageFullData, TextUsageFullData, Usage, UserContext
 
 
+def _extract_cached_tokens(usage_json: dict) -> int:
+    """Read the prefix-cache hit count from an OpenAI/vLLM usage object.
+
+    vLLM only emits `usage.prompt_tokens_details.cached_tokens` when the server runs with
+    `--enable-prompt-tokens-details`; otherwise the field is absent/null and we report 0.
+    """
+    details = usage_json.get("prompt_tokens_details")
+    if isinstance(details, dict):
+        return int(details.get("cached_tokens") or 0)
+    return 0
+
+
 def _iter_json_at_key(text: str, key: str) -> Iterator[dict]:
     """Yield each `"key": {...}` value as a parsed dict. Handles nested braces."""
     pattern = re.compile(rf'"{re.escape(key)}"\s*:\s*(?=\{{)')
@@ -111,7 +123,7 @@ def extract_usage_info_from_raw(raw_data: bytes, context: UserContext) -> Usage:
                 return Usage(
                     input_tokens=int(usage_json.get("prompt_tokens", 0)),
                     output_tokens=int(usage_json.get("completion_tokens", 0)),
-                    cached_tokens=0,
+                    cached_tokens=_extract_cached_tokens(usage_json),
                 )
 
         # llama.cpp: usage is embedded as a "timings" object in the final chunk
@@ -166,7 +178,7 @@ def extract_usage_info(data: dict[str, Any], context: UserContext) -> Usage:
         return Usage(
             input_tokens=int(usage_data.get("prompt_tokens", 0)),
             output_tokens=int(usage_data.get("completion_tokens", 0)),
-            cached_tokens=0,
+            cached_tokens=_extract_cached_tokens(usage_data),
         )
     elif context.endpoint == "v1/embeddings":
         # Embeddings are input-only: usage carries prompt_tokens (== total_tokens), no completion.
