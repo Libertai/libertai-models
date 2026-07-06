@@ -20,6 +20,15 @@ def _extract_cached_tokens(usage_json: dict) -> int:
     return 0
 
 
+def _anthropic_cache_tokens(usage_json: dict) -> tuple[int, int]:
+    # Anthropic usage splits cache hits out of input_tokens (vLLM >=0.24); callers add these
+    # back to recover the OpenAI-style total. Absent on older vLLM -> (0, 0).
+    return (
+        int(usage_json.get("cache_read_input_tokens") or 0),
+        int(usage_json.get("cache_creation_input_tokens") or 0),
+    )
+
+
 def _iter_json_at_key(text: str, key: str) -> Iterator[dict]:
     """Yield each `"key": {...}` value as a parsed dict. Handles nested braces."""
     pattern = re.compile(rf'"{re.escape(key)}"\s*:\s*(?=\{{)')
@@ -83,19 +92,23 @@ def extract_usage_info_from_raw(raw_data: bytes, context: UserContext) -> Usage:
         raise ValueError("Unable to decode raw response content")
 
     if context.endpoint == "v1/messages":
-        # Claude/Anthropic streaming: `message_start` carries initial usage (output_tokens=0
-        # or 1) and `message_delta` carries the final cumulative usage. Both report
-        # input_tokens, so SUMMING would double-count. Take the max across all events.
-        input_tokens = 0
-        output_tokens = 0
+        # message_start and message_delta both carry cumulative usage, so max (not sum).
+        input_tokens = output_tokens = cache_read = cache_creation = 0
         seen = False
         for usage_json in _iter_json_at_key(text, "usage"):
             seen = True
             input_tokens = max(input_tokens, int(usage_json.get("input_tokens", 0)))
             output_tokens = max(output_tokens, int(usage_json.get("output_tokens", 0)))
+            cr, cc = _anthropic_cache_tokens(usage_json)
+            cache_read = max(cache_read, cr)
+            cache_creation = max(cache_creation, cc)
 
         if seen:
-            return Usage(input_tokens=input_tokens, output_tokens=output_tokens, cached_tokens=0)
+            return Usage(
+                input_tokens=input_tokens + cache_read + cache_creation,
+                output_tokens=output_tokens,
+                cached_tokens=cache_read,
+            )
 
         raise ValueError("No usage data found in Claude API streaming response")
 
@@ -158,12 +171,12 @@ def extract_usage_info(data: dict[str, Any], context: UserContext) -> Usage:
     """
 
     if context.endpoint == "v1/messages":
-        # Claude API format: usage.input_tokens and usage.output_tokens
-        usage_data: dict = data.get("usage", {})
+        usage_data = data.get("usage", {})
+        cache_read, cache_creation = _anthropic_cache_tokens(usage_data)
         return Usage(
-            input_tokens=int(usage_data.get("input_tokens", 0)),
+            input_tokens=int(usage_data.get("input_tokens", 0)) + cache_read + cache_creation,
             output_tokens=int(usage_data.get("output_tokens", 0)),
-            cached_tokens=0,
+            cached_tokens=cache_read,
         )
     elif context.endpoint == "v1/responses":
         # Responses API format: usage at top level with input_tokens, output_tokens
