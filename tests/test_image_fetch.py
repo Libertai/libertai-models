@@ -345,3 +345,58 @@ async def test_cache_put_reinsert_does_not_leak_bytes(monkeypatch):
     first = imgf._positive_bytes
     imgf._cache_put("https://x.test/a.png", "B" * 100, "image/png")
     assert imgf._positive_bytes == first  # not doubled
+
+
+from src.image_fetch import inline_remote_images
+
+
+async def test_inline_no_images_is_noop():
+    body = {"messages": [{"role": "user", "content": "hello"}]}
+    out, changed = await inline_remote_images("v1/chat/completions", body)
+    assert changed is False
+    assert out is body
+
+
+async def test_inline_rewrites_all_occurrences(monkeypatch):
+    imgf._reset_cache_for_tests()
+
+    async def fake(url):
+        return B64, "image/png"
+
+    monkeypatch.setattr(imgf, "get_or_fetch", fake)
+    body = {"messages": [
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": URL}}]},
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": URL}}]},
+    ]}
+    out, changed = await inline_remote_images("v1/chat/completions", body)
+    assert changed is True
+    urls = [m["content"][0]["image_url"]["url"] for m in out["messages"]]
+    assert urls == [f"data:image/png;base64,{B64}"] * 2
+
+
+async def test_inline_enforces_cap(monkeypatch):
+    async def fake(url):
+        return B64, "image/png"
+
+    monkeypatch.setattr(imgf, "get_or_fetch", fake)
+    content = [
+        {"type": "image_url", "image_url": {"url": f"https://x.test/{i}.png"}}
+        for i in range(5)
+    ]
+    body = {"messages": [{"role": "user", "content": content}]}
+    with pytest.raises(HTTPException) as e:
+        await inline_remote_images("v1/chat/completions", body)
+    assert e.value.status_code == 400
+
+
+async def test_inline_propagates_fetch_400(monkeypatch):
+    async def failing(url):
+        raise HTTPException(status_code=400, detail="Failed to fetch image URL")
+
+    monkeypatch.setattr(imgf, "get_or_fetch", failing)
+    body = {"messages": [{"role": "user", "content": [
+        {"type": "image_url", "image_url": {"url": URL}},
+    ]}]}
+    with pytest.raises(HTTPException) as e:
+        await inline_remote_images("v1/chat/completions", body)
+    assert e.value.status_code == 400
