@@ -2,7 +2,7 @@ import ipaddress
 
 import pytest
 
-from src.image_fetch import _is_public_ip
+from src.image_fetch import _is_public_ip, _sniff_mime
 
 
 @pytest.mark.parametrize(
@@ -26,3 +26,20 @@ from src.image_fetch import _is_public_ip
 )
 def test_is_public_ip(addr, expected):
     assert _is_public_ip(ipaddress.ip_address(addr)) is expected
+
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 16
+GIF = b"GIF89a" + b"\x00" * 16
+WEBP = b"RIFF" + b"\x00\x00\x00\x00" + b"WEBP" + b"\x00" * 8
+BMP = b"BM" + b"\x00" * 16
+
+
+def test_sniff_mime():
+    assert _sniff_mime(PNG) == "image/png"
+    assert _sniff_mime(JPEG) == "image/jpeg"
+    assert _sniff_mime(GIF) == "image/gif"
+    assert _sniff_mime(WEBP) == "image/webp"
+    assert _sniff_mime(BMP) is None          # BMP deliberately rejected
+    assert _sniff_mime(b"not an image") is None
+    assert _sniff_mime(b"") is None
