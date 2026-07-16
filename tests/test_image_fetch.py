@@ -1,8 +1,20 @@
+import asyncio
+import base64
 import ipaddress
 
+import httpx
 import pytest
+from fastapi import HTTPException
 
-from src.image_fetch import _is_public_ip, _sniff_mime, _ImagePart
+import src.image_fetch as imgf
+from src.image_fetch import (
+    _ImagePart,
+    _collect_image_parts,
+    _is_public_ip,
+    _rewrite,
+    _sniff_mime,
+    inline_remote_images,
+)
 
 
 def _ImagePartFor(part, kind):
@@ -48,8 +60,6 @@ def test_sniff_mime():
     assert _sniff_mime(b"not an image") is None
     assert _sniff_mime(b"") is None
 
-
-from src.image_fetch import _collect_image_parts, _rewrite
 
 URL = "https://example.com/a.png"
 
@@ -113,11 +123,6 @@ def _ok_resolver(ip):
     async def _r(host):
         return [ip]
     return _r
-
-
-import httpx
-
-import src.image_fetch as imgf
 
 
 def _mock_client(handler):
@@ -246,11 +251,6 @@ async def test_fetch_connect_error_wrapped_transient(monkeypatch):
     assert ei.value.transient is True
 
 
-import asyncio
-import base64
-
-from fastapi import HTTPException
-
 B64 = base64.b64encode(PNG).decode()
 
 
@@ -345,9 +345,6 @@ async def test_cache_put_reinsert_does_not_leak_bytes(monkeypatch):
     first = imgf._positive_bytes
     imgf._cache_put("https://x.test/a.png", "B" * 100, "image/png")
     assert imgf._positive_bytes == first  # not doubled
-
-
-from src.image_fetch import inline_remote_images
 
 
 async def test_inline_no_images_is_noop():
