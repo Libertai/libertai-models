@@ -319,11 +319,12 @@ async def inline_remote_images(full_path: str, body_json: dict) -> tuple[dict, b
 
     tasks = {u: asyncio.ensure_future(get_or_fetch(u)) for u in unique}
     try:
-        results = {u: await t for u, t in tasks.items()}
+        await asyncio.gather(*tasks.values())
     except BaseException:
         for t in tasks.values():
             t.cancel()
         raise
+    results = {u: t.result() for u, t in tasks.items()}
 
     for p in parts:
         b64, mime = results[p.url]
