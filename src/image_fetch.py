@@ -303,3 +303,29 @@ async def _run_fetch(url: str, fut: asyncio.Future) -> None:
         _cache_put(url, b64, mime)
     if not fut.done():
         fut.set_result((b64, mime))
+
+
+async def inline_remote_images(full_path: str, body_json: dict) -> tuple[dict, bool]:
+    parts = _collect_image_parts(body_json)
+    if not parts:
+        return body_json, False
+
+    unique = list({p.url for p in parts})
+    if len(unique) > MAX_IMAGES_PER_REQUEST:
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail=f"Too many image URLs in request (max {MAX_IMAGES_PER_REQUEST})",
+        )
+
+    tasks = {u: asyncio.ensure_future(get_or_fetch(u)) for u in unique}
+    try:
+        results = {u: await t for u, t in tasks.items()}
+    except BaseException:
+        for t in tasks.values():
+            t.cancel()
+        raise
+
+    for p in parts:
+        b64, mime = results[p.url]
+        _rewrite(p, b64, mime)
+    return body_json, True
