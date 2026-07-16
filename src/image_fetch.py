@@ -96,7 +96,7 @@ def _rewrite(part: "_ImagePart", b64: str, mime: str) -> None:
 
 _fetch_client = httpx.AsyncClient(
     follow_redirects=False,
-    timeout=httpx.Timeout(FETCH_TIMEOUT),
+    timeout=None,
 )
 
 
@@ -133,6 +133,13 @@ async def _fetch_bytes(url: str) -> tuple[bytes, str]:
             return await _fetch_loop(url)
     except TimeoutError:
         raise ImageFetchError("timed out", transient=True)
+    except httpx.RequestError as e:
+        raise ImageFetchError(f"request failed: {type(e).__name__}", transient=True)
+    except httpx.InvalidURL as e:
+        # httpx builds the redirect URL eagerly (even with follow_redirects=False) to
+        # populate response.next_request, and raises this for malformed Location values
+        # (e.g. a non-http(s) scheme like data:/file:) before our own scheme check runs.
+        raise ImageFetchError(f"invalid redirect target: {e}", transient=False)
 
 
 async def _fetch_loop(url: str) -> tuple[bytes, str]:

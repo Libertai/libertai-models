@@ -202,3 +202,45 @@ async def test_fetch_too_many_redirects(monkeypatch):
     with pytest.raises(imgf.ImageFetchError) as ei:
         await imgf._fetch_bytes("https://example.com/a.png")
     assert "redirect" in ei.value.reason.lower()
+
+
+async def test_fetch_redirect_to_data_uri_rejected(monkeypatch):
+    monkeypatch.setattr(imgf, "_resolve_public_ips", _ok_resolver("93.184.216.34"))
+
+    def handler(request):
+        return httpx.Response(302, headers={"location": "data:text/html,x"})
+
+    monkeypatch.setattr(imgf, "_fetch_client", _mock_client(handler))
+    # httpx itself raises InvalidURL while eagerly building the redirect request
+    # (even with follow_redirects=False), before our own scheme check ever runs.
+    with pytest.raises(imgf.ImageFetchError) as ei:
+        await imgf._fetch_bytes("https://example.com/a.png")
+    assert not ei.value.transient
+
+
+async def test_resolve_public_ips_rejects_if_any_address_private(monkeypatch):
+    import asyncio
+
+    async def fake_getaddrinfo(host, *a, **k):
+        return [
+            (2, 1, 6, "", ("93.184.216.34", 0)),
+            (2, 1, 6, "", ("10.0.0.5", 0)),
+        ]
+
+    loop = asyncio.get_event_loop()
+    monkeypatch.setattr(loop, "getaddrinfo", fake_getaddrinfo, raising=False)
+    with pytest.raises(imgf.ImageFetchError) as ei:
+        await imgf._resolve_public_ips("mixed.test")
+    assert not ei.value.transient
+
+
+async def test_fetch_connect_error_wrapped_transient(monkeypatch):
+    monkeypatch.setattr(imgf, "_resolve_public_ips", _ok_resolver("93.184.216.34"))
+
+    def handler(request):
+        raise httpx.ConnectError("refused")
+
+    monkeypatch.setattr(imgf, "_fetch_client", _mock_client(handler))
+    with pytest.raises(imgf.ImageFetchError) as ei:
+        await imgf._fetch_bytes("https://example.com/a.png")
+    assert ei.value.transient is True
