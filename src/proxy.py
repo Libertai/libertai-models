@@ -47,6 +47,10 @@ class ProxyRequest(BaseModel):
 
 client = httpx.AsyncClient(timeout=timeout, limits=limits)
 
+# OpenAI completion paths that get stream_options.include_usage injected (llama.cpp
+# ignores the field). Kept separate from IMAGE_INLINE_PATHS on purpose.
+STREAM_USAGE_PATHS = ("v1/chat/completions", "v1/completions")
+
 # Register image model configs with the manager
 _image_manager = ImageModelManager()
 for _model_id, _model_config in config.MODEL_CONFIGS.items():
@@ -180,38 +184,43 @@ async def proxy_request(
     # Clean up headers
     headers.pop("host", None)
 
-    # Inline remote image URLs (fetch + base64) so vLLM never fetches them itself.
-    # Fetch/validation failures surface as 400; an unexpected bug forwards the body
-    # unmodified rather than 500 (a 500 would make the api router fail over on every replica).
-    if full_path in IMAGE_INLINE_PATHS and b"http" in body:
+    # Two body rewrites can apply: inline remote image URLs (fetch + base64) so vLLM
+    # never fetches them itself, and inject stream_options.include_usage so streaming
+    # usage accounting works. Parse once (FastAPI already parsed the body for the
+    # pydantic model, so request.json() is cached), mutate, re-serialize once.
+    want_inline = full_path in IMAGE_INLINE_PATHS
+    want_stream_usage = full_path in STREAM_USAGE_PATHS
+    if want_inline or want_stream_usage:
         try:
-            image_body_json = json.loads(body)
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            image_body_json = None
-        if isinstance(image_body_json, dict):
-            try:
-                image_body_json, image_changed = await inline_remote_images(full_path, image_body_json)
-            except HTTPException:
-                raise
-            except Exception:
-                logger.exception("image inline failed; forwarding request unmodified")
-                image_changed = False
-            if image_changed:
-                body = json.dumps(image_body_json).encode()
-                headers.pop("content-length", None)
-
-    # Force vLLM/OpenAI servers to emit a `usage` object on the final SSE chunk
-    # so streaming usage accounting works. llama.cpp ignores stream_options.
-    if full_path in ("v1/chat/completions", "v1/completions"):
-        try:
-            body_json = json.loads(body)
+            body_json = await request.json()
         except (json.JSONDecodeError, UnicodeDecodeError):
             body_json = None
-        if isinstance(body_json, dict) and body_json.get("stream") is True:
-            stream_options = body_json.get("stream_options") or {}
-            if not stream_options.get("include_usage"):
-                stream_options["include_usage"] = True
-                body_json["stream_options"] = stream_options
+        body_changed = False
+        if isinstance(body_json, dict):
+            # Fetch/validation failures surface as 400; an unexpected bug forwards the
+            # body unmodified rather than 500 (a 500 would make the api router fail over
+            # on every replica).
+            if want_inline:
+                try:
+                    body_json, inlined = await inline_remote_images(body_json)
+                # Load-bearing: re-raise fetch 400s so they reach the client. Without
+                # this they'd be caught by the except Exception below and the body
+                # forwarded unmodified (defeating the SSRF/validation guards).
+                except HTTPException:
+                    raise
+                except Exception:
+                    logger.exception("image inline failed; forwarding request unmodified")
+                    inlined = False
+                body_changed = body_changed or inlined
+            # stream_options injection is llama.cpp-safe (it ignores the field) and
+            # stays gated to the OpenAI completion paths only.
+            if want_stream_usage and body_json.get("stream") is True:
+                stream_options = body_json.get("stream_options") or {}
+                if not stream_options.get("include_usage"):
+                    stream_options["include_usage"] = True
+                    body_json["stream_options"] = stream_options
+                    body_changed = True
+            if body_changed:
                 body = json.dumps(body_json).encode()
                 headers.pop("content-length", None)
 
@@ -254,8 +263,8 @@ async def proxy_request(
                                 **extract_usage_info_from_raw(full_response_buffer, user_context).model_dump(),
                             )
                             background_tasks.add_task(report_usage_event_task, usage_data)
-                        except Exception as e:
-                            print(f"Streaming usage extraction failed: {e}")
+                        except Exception:
+                            logger.exception("streaming usage extraction failed")
 
             return StreamingResponse(
                 content=generate_chunks(),
@@ -276,8 +285,8 @@ async def proxy_request(
                         **extract_usage_info(response_json, user_context).model_dump(),
                     )
                     background_tasks.add_task(report_usage_event_task, usage_data)
-                except Exception as e:
-                    print(f"Exception occurred during usage report {str(e)}")
+                except Exception:
+                    logger.exception("usage report failed")
 
             return Response(
                 content=response_bytes,
