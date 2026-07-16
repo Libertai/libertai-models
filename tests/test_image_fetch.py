@@ -316,3 +316,32 @@ async def test_failure_reaches_all_waiters(monkeypatch):
     )
     assert all(isinstance(r, HTTPException) for r in results)
     assert "https://x.test/f.png" not in imgf._inflight  # future cleaned up
+
+
+async def test_cancelling_one_waiter_does_not_affect_others(monkeypatch):
+    imgf._reset_cache_for_tests()
+
+    async def slow(url):
+        await asyncio.sleep(0.05)
+        return PNG, "image/png"
+
+    monkeypatch.setattr(imgf, "_fetch_bytes", slow)
+    t1 = asyncio.create_task(imgf.get_or_fetch("https://x.test/a.png"))
+    t2 = asyncio.create_task(imgf.get_or_fetch("https://x.test/a.png"))
+    t3 = asyncio.create_task(imgf.get_or_fetch("https://x.test/a.png"))
+    await asyncio.sleep(0.01)   # let all three register as waiters
+    t1.cancel()
+    r2, r3 = await asyncio.gather(t2, t3)
+    assert r2 == (B64, "image/png")
+    assert r3 == (B64, "image/png")
+    with pytest.raises(asyncio.CancelledError):
+        await t1
+    assert imgf._positive.get("https://x.test/a.png") is not None  # populated despite cancellation
+
+
+async def test_cache_put_reinsert_does_not_leak_bytes(monkeypatch):
+    imgf._reset_cache_for_tests()
+    imgf._cache_put("https://x.test/a.png", "A" * 100, "image/png")
+    first = imgf._positive_bytes
+    imgf._cache_put("https://x.test/a.png", "B" * 100, "image/png")
+    assert imgf._positive_bytes == first  # not doubled
