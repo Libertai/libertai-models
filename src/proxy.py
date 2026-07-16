@@ -18,6 +18,7 @@ from src.config import (
     TextModelConfig,
     config,
 )
+from src.image_fetch import IMAGE_INLINE_PATHS, aclose_client, inline_remote_images
 from src.image_generation import ImageModelManager
 from src.interfaces.usage import TextUsageFullData, UserContext
 from src.tts_generation import TTSModelManager
@@ -59,6 +60,7 @@ _tts_manager = TTSModelManager()
 @router.on_event("shutdown")
 async def shutdown_event():
     await client.aclose()
+    await aclose_client()
 
 
 @router.get("/health/{model_name}")
@@ -177,6 +179,26 @@ async def proxy_request(
 
     # Clean up headers
     headers.pop("host", None)
+
+    # Inline remote image URLs (fetch + base64) so vLLM never fetches them itself.
+    # Fetch/validation failures surface as 400; an unexpected bug forwards the body
+    # unmodified rather than 500 (a 500 would make the api router fail over on every replica).
+    if full_path in IMAGE_INLINE_PATHS and b"http" in body:
+        try:
+            image_body_json = json.loads(body)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            image_body_json = None
+        if isinstance(image_body_json, dict):
+            try:
+                image_body_json, image_changed = await inline_remote_images(full_path, image_body_json)
+            except HTTPException:
+                raise
+            except Exception:
+                logger.exception("image inline failed; forwarding request unmodified")
+                image_changed = False
+            if image_changed:
+                body = json.dumps(image_body_json).encode()
+                headers.pop("content-length", None)
 
     # Force vLLM/OpenAI servers to emit a `usage` object on the final SSE chunk
     # so streaming usage accounting works. llama.cpp ignores stream_options.
