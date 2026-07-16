@@ -2,7 +2,11 @@ import ipaddress
 
 import pytest
 
-from src.image_fetch import _is_public_ip, _sniff_mime
+from src.image_fetch import _is_public_ip, _sniff_mime, _ImagePart
+
+
+def _ImagePartFor(part, kind):
+    return _ImagePart(part=part, kind=kind, url=part.get("image_url", {}).get("url", "") if isinstance(part.get("image_url"), dict) else "")
 
 
 @pytest.mark.parametrize(
@@ -43,3 +47,63 @@ def test_sniff_mime():
     assert _sniff_mime(BMP) is None          # BMP deliberately rejected
     assert _sniff_mime(b"not an image") is None
     assert _sniff_mime(b"") is None
+
+
+from src.image_fetch import _collect_image_parts, _rewrite
+
+URL = "https://example.com/a.png"
+
+
+def test_collect_openai_chat():
+    body = {"messages": [{"role": "user", "content": [
+        {"type": "text", "text": "hi"},
+        {"type": "image_url", "image_url": {"url": URL}},
+    ]}]}
+    parts = _collect_image_parts(body)
+    assert len(parts) == 1
+    assert parts[0].kind == "openai_chat"
+    assert parts[0].url == URL
+
+
+def test_collect_openai_responses():
+    body = {"input": [{"role": "user", "content": [
+        {"type": "input_image", "image_url": URL},
+    ]}]}
+    parts = _collect_image_parts(body)
+    assert [(p.kind, p.url) for p in parts] == [("openai_responses", URL)]
+
+
+def test_collect_anthropic_url_source():
+    body = {"messages": [{"role": "user", "content": [
+        {"type": "image", "source": {"type": "url", "url": URL}},
+    ]}]}
+    parts = _collect_image_parts(body)
+    assert [(p.kind, p.url) for p in parts] == [("anthropic", URL)]
+
+
+def test_collect_ignores_data_urls_and_base64_sources():
+    body = {"messages": [{"role": "user", "content": [
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AAAA"}},
+    ]}]}
+    assert _collect_image_parts(body) == []
+
+
+def test_collect_repeated_url_yields_each_occurrence():
+    body = {"messages": [
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": URL}}]},
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": URL}}]},
+    ]}
+    assert len(_collect_image_parts(body)) == 2
+
+
+def test_rewrite_each_format():
+    chat = {"type": "image_url", "image_url": {"url": URL}}
+    resp = {"type": "input_image", "image_url": URL}
+    anth = {"type": "image", "source": {"type": "url", "url": URL}}
+    _rewrite(_ImagePartFor(chat, "openai_chat"), "QUJD", "image/png")
+    _rewrite(_ImagePartFor(resp, "openai_responses"), "QUJD", "image/jpeg")
+    _rewrite(_ImagePartFor(anth, "anthropic"), "QUJD", "image/gif")
+    assert chat["image_url"]["url"] == "data:image/png;base64,QUJD"
+    assert resp["image_url"] == "data:image/jpeg;base64,QUJD"
+    assert anth["source"] == {"type": "base64", "media_type": "image/gif", "data": "QUJD"}

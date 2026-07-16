@@ -1,4 +1,5 @@
 import ipaddress
+from dataclasses import dataclass
 
 FETCH_TIMEOUT = 10
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
@@ -40,3 +41,49 @@ def _sniff_mime(data: bytes) -> str | None:
     if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return "image/webp"
     return None
+
+
+@dataclass
+class _ImagePart:
+    part: dict
+    kind: str  # "openai_chat" | "openai_responses" | "anthropic"
+    url: str
+
+
+def _collect_image_parts(body_json) -> list["_ImagePart"]:
+    out: list[_ImagePart] = []
+
+    def walk(obj) -> None:
+        if isinstance(obj, dict):
+            t = obj.get("type")
+            if t == "image_url" and isinstance(obj.get("image_url"), dict):
+                u = obj["image_url"].get("url")
+                if isinstance(u, str) and not u.startswith("data:"):
+                    out.append(_ImagePart(obj, "openai_chat", u))
+            elif t == "input_image" and isinstance(obj.get("image_url"), str):
+                u = obj["image_url"]
+                if not u.startswith("data:"):
+                    out.append(_ImagePart(obj, "openai_responses", u))
+            elif t == "image" and isinstance(obj.get("source"), dict) \
+                    and obj["source"].get("type") == "url":
+                u = obj["source"].get("url")
+                if isinstance(u, str) and not u.startswith("data:"):
+                    out.append(_ImagePart(obj, "anthropic", u))
+            for v in obj.values():
+                walk(v)
+        elif isinstance(obj, list):
+            for v in obj:
+                walk(v)
+
+    walk(body_json)
+    return out
+
+
+def _rewrite(part: "_ImagePart", b64: str, mime: str) -> None:
+    data_url = f"data:{mime};base64,{b64}"
+    if part.kind == "openai_chat":
+        part.part["image_url"]["url"] = data_url
+    elif part.kind == "openai_responses":
+        part.part["image_url"] = data_url
+    elif part.kind == "anthropic":
+        part.part["source"] = {"type": "base64", "media_type": mime, "data": b64}
