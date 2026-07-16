@@ -1,5 +1,10 @@
+import asyncio
 import ipaddress
+import socket
 from dataclasses import dataclass
+from urllib.parse import urljoin, urlparse, urlunparse
+
+import httpx
 
 FETCH_TIMEOUT = 10
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
@@ -87,3 +92,97 @@ def _rewrite(part: "_ImagePart", b64: str, mime: str) -> None:
         part.part["image_url"] = data_url
     elif part.kind == "anthropic":
         part.part["source"] = {"type": "base64", "media_type": mime, "data": b64}
+
+
+_fetch_client = httpx.AsyncClient(
+    follow_redirects=False,
+    timeout=httpx.Timeout(FETCH_TIMEOUT),
+)
+
+
+async def aclose_client() -> None:
+    await _fetch_client.aclose()
+
+
+async def _resolve_public_ips(host: str) -> list[str]:
+    loop = asyncio.get_event_loop()
+    try:
+        infos = await loop.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except socket.gaierror as e:
+        raise ImageFetchError(f"DNS resolution failed: {e}", transient=True)
+    ips: list[str] = []
+    for info in infos:
+        addr = info[4][0]
+        try:
+            ip_obj = ipaddress.ip_address(addr)
+        except ValueError:
+            continue
+        if not _is_public_ip(ip_obj):
+            raise ImageFetchError(
+                f"resolves to non-public address {addr}", transient=False
+            )
+        ips.append(addr)
+    if not ips:
+        raise ImageFetchError("host did not resolve", transient=True)
+    return ips
+
+
+async def _fetch_bytes(url: str) -> tuple[bytes, str]:
+    try:
+        async with asyncio.timeout(FETCH_TIMEOUT):
+            return await _fetch_loop(url)
+    except TimeoutError:
+        raise ImageFetchError("timed out", transient=True)
+
+
+async def _fetch_loop(url: str) -> tuple[bytes, str]:
+    current = url
+    for _ in range(MAX_REDIRECTS + 1):
+        parsed = urlparse(current)
+        if parsed.scheme not in ("http", "https"):
+            raise ImageFetchError(
+                f"unsupported scheme {parsed.scheme!r}", transient=False
+            )
+        host = parsed.hostname
+        if not host:
+            raise ImageFetchError("missing host", transient=False)
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+
+        ips = await _resolve_public_ips(host)
+        ip = ips[0]
+        ip_authority = f"[{ip}]:{port}" if ":" in ip else f"{ip}:{port}"
+        target = urlunparse(
+            (parsed.scheme, ip_authority, parsed.path or "/", parsed.params, parsed.query, "")
+        )
+        host_hdr = f"[{host}]" if ":" in host else host
+        if port not in (80, 443):
+            host_hdr = f"{host_hdr}:{port}"
+        headers = {"Host": host_hdr, "User-Agent": USER_AGENT, "Accept": "image/*"}
+
+        async with _fetch_client.stream(
+            "GET", target, headers=headers, extensions={"sni_hostname": host}
+        ) as resp:
+            if resp.status_code in (301, 302, 303, 307, 308):
+                loc = resp.headers.get("location")
+                if not loc:
+                    raise ImageFetchError(
+                        f"redirect {resp.status_code} without location", transient=False
+                    )
+                current = urljoin(current, loc)
+                continue
+            if resp.status_code >= 400:
+                raise ImageFetchError(
+                    f"HTTP {resp.status_code}", transient=resp.status_code >= 500
+                )
+            buf = bytearray()
+            async for chunk in resp.aiter_bytes():
+                buf += chunk
+                if len(buf) > MAX_IMAGE_BYTES:
+                    raise ImageFetchError(
+                        f"exceeds {MAX_IMAGE_BYTES} bytes", transient=False
+                    )
+            mime = _sniff_mime(bytes(buf))
+            if mime is None:
+                raise ImageFetchError("not a recognized image", transient=False)
+            return bytes(buf), mime
+    raise ImageFetchError(f"too many redirects (>{MAX_REDIRECTS})", transient=False)
