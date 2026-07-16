@@ -1,10 +1,15 @@
 import asyncio
+import base64
 import ipaddress
+import logging
 import socket
+from collections import OrderedDict
 from dataclasses import dataclass
+from http import HTTPStatus
 from urllib.parse import urljoin, urlparse, urlunparse
 
 import httpx
+from fastapi import HTTPException
 
 FETCH_TIMEOUT = 10
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
@@ -193,3 +198,102 @@ async def _fetch_loop(url: str) -> tuple[bytes, str]:
                 raise ImageFetchError("not a recognized image", transient=False)
             return bytes(buf), mime
     raise ImageFetchError(f"too many redirects (>{MAX_REDIRECTS})", transient=False)
+
+
+logger = logging.getLogger(__name__)
+
+_positive: "OrderedDict[str, tuple[float, str, str]]" = OrderedDict()  # url -> (expiry, b64, mime)
+_positive_bytes = 0
+_negative: dict[str, tuple[float, str]] = {}  # url -> (expiry, reason)
+_inflight: dict[str, asyncio.Future] = {}
+_cache_lock = asyncio.Lock()
+_fetch_semaphore = asyncio.Semaphore(GLOBAL_FETCH_CONCURRENCY)
+
+_stats = {"hits": 0, "misses": 0, "evictions": 0, "neg_hits": 0, "coalesced": 0}
+
+
+def _reset_cache_for_tests() -> None:
+    global _positive_bytes
+    _positive.clear()
+    _negative.clear()
+    _inflight.clear()
+    _positive_bytes = 0
+    for k in _stats:
+        _stats[k] = 0
+
+
+def _cache_put(url: str, b64: str, mime: str) -> None:
+    global _positive_bytes
+    size = len(b64)
+    now = asyncio.get_event_loop().time()
+    _positive[url] = (now + CACHE_TTL, b64, mime)
+    _positive.move_to_end(url)
+    _positive_bytes += size
+    while _positive_bytes > CACHE_MAX_BYTES and _positive:
+        _, (_, old_b64, _m) = _positive.popitem(last=False)
+        _positive_bytes -= len(old_b64)
+        _stats["evictions"] += 1
+
+
+async def get_or_fetch(url: str) -> tuple[str, str]:
+    now = asyncio.get_event_loop().time()
+    async with _cache_lock:
+        ent = _positive.get(url)
+        if ent and ent[0] > now:
+            _positive.move_to_end(url)
+            _stats["hits"] += 1
+            return ent[1], ent[2]
+        neg = _negative.get(url)
+        if neg and neg[0] > now:
+            _stats["neg_hits"] += 1
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail=f"Failed to fetch image URL {url}: {neg[1]}",
+            )
+        fut = _inflight.get(url)
+        if fut is None:
+            _stats["misses"] += 1
+            fut = asyncio.get_event_loop().create_future()
+            _inflight[url] = fut
+            asyncio.create_task(_run_fetch(url, fut))
+        else:
+            _stats["coalesced"] += 1
+    return await fut
+
+
+async def _run_fetch(url: str, fut: asyncio.Future) -> None:
+    try:
+        async with _fetch_semaphore:
+            raw, mime = await _fetch_bytes(url)
+        b64 = base64.b64encode(raw).decode()
+    except ImageFetchError as e:
+        ttl = NEG_CACHE_TTL_TRANSIENT if e.transient else NEG_CACHE_TTL_DETERMINISTIC
+        async with _cache_lock:
+            _inflight.pop(url, None)
+            _negative[url] = (asyncio.get_event_loop().time() + ttl, e.reason)
+        logger.warning("image fetch failed url=%s reason=%s transient=%s", url, e.reason, e.transient)
+        if not fut.done():
+            fut.set_exception(
+                HTTPException(
+                    status_code=HTTPStatus.BAD_REQUEST,
+                    detail=f"Failed to fetch image URL {url}: {e.reason}",
+                )
+            )
+        return
+    except Exception as e:  # unexpected — do not poison cache long-term
+        async with _cache_lock:
+            _inflight.pop(url, None)
+        logger.exception("unexpected image fetch error url=%s", url)
+        if not fut.done():
+            fut.set_exception(
+                HTTPException(
+                    status_code=HTTPStatus.BAD_REQUEST,
+                    detail=f"Failed to fetch image URL {url}: {type(e).__name__}",
+                )
+            )
+        return
+    async with _cache_lock:
+        _inflight.pop(url, None)
+        _cache_put(url, b64, mime)
+    if not fut.done():
+        fut.set_result((b64, mime))
