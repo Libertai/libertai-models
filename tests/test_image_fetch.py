@@ -400,3 +400,23 @@ async def test_inline_propagates_fetch_400(monkeypatch):
     with pytest.raises(HTTPException) as e:
         await inline_remote_images("v1/chat/completions", body)
     assert e.value.status_code == 400
+
+
+async def test_inline_fails_fast_on_first_failure(monkeypatch):
+    imgf._reset_cache_for_tests()
+
+    async def fake(url):
+        if "slow" in url:
+            await asyncio.sleep(5)
+            return B64, "image/png"
+        await asyncio.sleep(0.01)
+        raise HTTPException(status_code=400, detail="Failed to fetch image URL")
+
+    monkeypatch.setattr(imgf, "get_or_fetch", fake)
+    body = {"messages": [{"role": "user", "content": [
+        {"type": "image_url", "image_url": {"url": "https://x.test/slow.png"}},
+        {"type": "image_url", "image_url": {"url": "https://x.test/bad.png"}},
+    ]}]}
+    with pytest.raises(HTTPException) as e:
+        await asyncio.wait_for(inline_remote_images("v1/chat/completions", body), timeout=1.0)
+    assert e.value.status_code == 400
