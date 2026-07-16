@@ -107,3 +107,98 @@ def test_rewrite_each_format():
     assert chat["image_url"]["url"] == "data:image/png;base64,QUJD"
     assert resp["image_url"] == "data:image/jpeg;base64,QUJD"
     assert anth["source"] == {"type": "base64", "media_type": "image/gif", "data": "QUJD"}
+
+
+def _ok_resolver(ip):
+    async def _r(host):
+        return [ip]
+    return _r
+
+
+import httpx
+
+import src.image_fetch as imgf
+
+
+def _mock_client(handler):
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=False)
+
+
+async def test_fetch_rejects_non_public_dns(monkeypatch):
+    async def fake_getaddrinfo(host, *a, **k):
+        return [(2, 1, 6, "", ("127.0.0.1", 0))]
+    monkeypatch.setattr(imgf.asyncio.get_event_loop(), "getaddrinfo", fake_getaddrinfo, raising=False)
+    monkeypatch.setattr(imgf, "_resolve_public_ips", imgf._resolve_public_ips)  # keep real
+    # patch getaddrinfo on the running loop used inside _resolve_public_ips
+    import asyncio
+    loop = asyncio.get_event_loop()
+    monkeypatch.setattr(loop, "getaddrinfo", fake_getaddrinfo, raising=False)
+    with pytest.raises(imgf.ImageFetchError) as ei:
+        await imgf._fetch_bytes("http://evil.test/a.png")
+    assert not ei.value.transient
+
+
+async def test_fetch_rejects_bad_scheme():
+    with pytest.raises(imgf.ImageFetchError) as ei:
+        await imgf._fetch_bytes("ftp://example.com/a.png")
+    assert "scheme" in ei.value.reason
+
+
+async def test_fetch_happy_path(monkeypatch):
+    monkeypatch.setattr(imgf, "_resolve_public_ips", _ok_resolver("93.184.216.34"))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["user-agent"] == imgf.USER_AGENT
+        assert request.headers["host"].startswith("example.com")
+        return httpx.Response(200, content=PNG)
+
+    monkeypatch.setattr(imgf, "_fetch_client", _mock_client(handler))
+    raw, mime = await imgf._fetch_bytes("https://example.com/a.png")
+    assert mime == "image/png"
+    assert raw == PNG
+
+
+async def test_fetch_size_cap(monkeypatch):
+    monkeypatch.setattr(imgf, "_resolve_public_ips", _ok_resolver("93.184.216.34"))
+    big = PNG + b"\x00" * (imgf.MAX_IMAGE_BYTES + 10)
+
+    def handler(request):
+        return httpx.Response(200, content=big)
+
+    monkeypatch.setattr(imgf, "_fetch_client", _mock_client(handler))
+    with pytest.raises(imgf.ImageFetchError) as ei:
+        await imgf._fetch_bytes("https://example.com/big.png")
+    assert "exceeds" in ei.value.reason
+
+
+async def test_fetch_redirect_to_private_blocked(monkeypatch):
+    # first host public, redirect target resolves private
+    def resolver(host):
+        async def _r(h=host):
+            return ["93.184.216.34"] if h == "example.com" else None
+        return _r
+
+    async def fake_resolve(host):
+        if host == "example.com":
+            return ["93.184.216.34"]
+        raise imgf.ImageFetchError(f"resolves to non-public address for {host}", transient=False)
+    monkeypatch.setattr(imgf, "_resolve_public_ips", fake_resolve)
+
+    def handler(request):
+        return httpx.Response(302, headers={"location": "http://169.254.169.254/latest/"})
+
+    monkeypatch.setattr(imgf, "_fetch_client", _mock_client(handler))
+    with pytest.raises(imgf.ImageFetchError):
+        await imgf._fetch_bytes("https://example.com/a.png")
+
+
+async def test_fetch_too_many_redirects(monkeypatch):
+    monkeypatch.setattr(imgf, "_resolve_public_ips", _ok_resolver("93.184.216.34"))
+
+    def handler(request):
+        return httpx.Response(302, headers={"location": "https://example.com/next"})
+
+    monkeypatch.setattr(imgf, "_fetch_client", _mock_client(handler))
+    with pytest.raises(imgf.ImageFetchError) as ei:
+        await imgf._fetch_bytes("https://example.com/a.png")
+    assert "redirect" in ei.value.reason.lower()
