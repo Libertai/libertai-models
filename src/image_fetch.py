@@ -226,6 +226,9 @@ def _cache_put(url: str, b64: str, mime: str) -> None:
     global _positive_bytes
     size = len(b64)
     now = asyncio.get_event_loop().time()
+    old = _positive.pop(url, None)
+    if old is not None:
+        _positive_bytes -= len(old[1])
     _positive[url] = (now + CACHE_TTL, b64, mime)
     _positive.move_to_end(url)
     _positive_bytes += size
@@ -258,7 +261,7 @@ async def get_or_fetch(url: str) -> tuple[str, str]:
             asyncio.create_task(_run_fetch(url, fut))
         else:
             _stats["coalesced"] += 1
-    return await fut
+    return await asyncio.shield(fut)
 
 
 async def _run_fetch(url: str, fut: asyncio.Future) -> None:
@@ -270,7 +273,10 @@ async def _run_fetch(url: str, fut: asyncio.Future) -> None:
         ttl = NEG_CACHE_TTL_TRANSIENT if e.transient else NEG_CACHE_TTL_DETERMINISTIC
         async with _cache_lock:
             _inflight.pop(url, None)
-            _negative[url] = (asyncio.get_event_loop().time() + ttl, e.reason)
+            now_t = asyncio.get_event_loop().time()
+            for k in [k for k, (exp, _r) in _negative.items() if exp <= now_t]:
+                del _negative[k]
+            _negative[url] = (now_t + ttl, e.reason)
         logger.warning("image fetch failed url=%s reason=%s transient=%s", url, e.reason, e.transient)
         if not fut.done():
             fut.set_exception(
