@@ -244,3 +244,75 @@ async def test_fetch_connect_error_wrapped_transient(monkeypatch):
     with pytest.raises(imgf.ImageFetchError) as ei:
         await imgf._fetch_bytes("https://example.com/a.png")
     assert ei.value.transient is True
+
+
+import asyncio
+import base64
+
+from fastapi import HTTPException
+
+B64 = base64.b64encode(PNG).decode()
+
+
+async def test_get_or_fetch_caches(monkeypatch):
+    imgf._reset_cache_for_tests()
+    calls = {"n": 0}
+
+    async def fake_fetch(url):
+        calls["n"] += 1
+        return PNG, "image/png"
+
+    monkeypatch.setattr(imgf, "_fetch_bytes", fake_fetch)
+    a = await imgf.get_or_fetch("https://x.test/a.png")
+    b = await imgf.get_or_fetch("https://x.test/a.png")
+    assert a == (B64, "image/png")
+    assert b == a
+    assert calls["n"] == 1  # second served from cache
+
+
+async def test_get_or_fetch_dedups_concurrent(monkeypatch):
+    imgf._reset_cache_for_tests()
+    calls = {"n": 0}
+
+    async def slow_fetch(url):
+        calls["n"] += 1
+        await asyncio.sleep(0.05)
+        return PNG, "image/png"
+
+    monkeypatch.setattr(imgf, "_fetch_bytes", slow_fetch)
+    results = await asyncio.gather(*[imgf.get_or_fetch("https://x.test/a.png") for _ in range(5)])
+    assert all(r == (B64, "image/png") for r in results)
+    assert calls["n"] == 1  # coalesced
+
+
+async def test_get_or_fetch_negative_cache(monkeypatch):
+    imgf._reset_cache_for_tests()
+    calls = {"n": 0}
+
+    async def failing(url):
+        calls["n"] += 1
+        raise imgf.ImageFetchError("HTTP 404", transient=False)
+
+    monkeypatch.setattr(imgf, "_fetch_bytes", failing)
+    with pytest.raises(HTTPException) as e1:
+        await imgf.get_or_fetch("https://x.test/missing.png")
+    assert e1.value.status_code == 400
+    with pytest.raises(HTTPException):
+        await imgf.get_or_fetch("https://x.test/missing.png")
+    assert calls["n"] == 1  # second served from negative cache
+
+
+async def test_failure_reaches_all_waiters(monkeypatch):
+    imgf._reset_cache_for_tests()
+
+    async def failing(url):
+        await asyncio.sleep(0.02)
+        raise imgf.ImageFetchError("boom", transient=True)
+
+    monkeypatch.setattr(imgf, "_fetch_bytes", failing)
+    results = await asyncio.gather(
+        *[imgf.get_or_fetch("https://x.test/f.png") for _ in range(4)],
+        return_exceptions=True,
+    )
+    assert all(isinstance(r, HTTPException) for r in results)
+    assert "https://x.test/f.png" not in imgf._inflight  # future cleaned up
