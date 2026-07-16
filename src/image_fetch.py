@@ -20,6 +20,8 @@ CACHE_MAX_BYTES = 64 * 1024 * 1024
 CACHE_TTL = 600
 NEG_CACHE_TTL_DETERMINISTIC = 60
 NEG_CACHE_TTL_TRANSIENT = 5
+NEG_CACHE_TTL_UNEXPECTED = 1
+MAX_NEG_ENTRIES = 1024
 USER_AGENT = "LibertAI/1.0 (+https://libertai.io)"
 
 IMAGE_INLINE_PATHS = {"v1/chat/completions", "v1/messages", "v1/responses"}
@@ -61,9 +63,13 @@ class _ImagePart:
 
 
 def _collect_image_parts(body_json) -> list["_ImagePart"]:
+    # Iterative walk (explicit stack) so a deeply nested body can't blow the
+    # Python recursion limit — json.loads accepts far deeper nesting than
+    # recursion would survive.
     out: list[_ImagePart] = []
-
-    def walk(obj) -> None:
+    stack = [body_json]
+    while stack:
+        obj = stack.pop()
         if isinstance(obj, dict):
             t = obj.get("type")
             if t == "image_url" and isinstance(obj.get("image_url"), dict):
@@ -79,13 +85,9 @@ def _collect_image_parts(body_json) -> list["_ImagePart"]:
                 u = obj["source"].get("url")
                 if isinstance(u, str) and not u.startswith("data:"):
                     out.append(_ImagePart(obj, "anthropic", u))
-            for v in obj.values():
-                walk(v)
+            stack.extend(obj.values())
         elif isinstance(obj, list):
-            for v in obj:
-                walk(v)
-
-    walk(body_json)
+            stack.extend(obj)
     return out
 
 
@@ -113,10 +115,11 @@ async def aclose_client() -> None:
 
 
 async def _resolve_public_ips(host: str) -> list[str]:
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         infos = await loop.getaddrinfo(host, None, type=socket.SOCK_STREAM)
-    except socket.gaierror as e:
+    except (socket.gaierror, UnicodeError) as e:
+        # UnicodeError: IDNA encoding of a malformed hostname.
         raise ImageFetchError(f"DNS resolution failed: {e}", transient=True)
     ips: list[str] = []
     for info in infos:
@@ -153,24 +156,27 @@ async def _fetch_bytes(url: str) -> tuple[bytes, str]:
 async def _fetch_loop(url: str) -> tuple[bytes, str]:
     current = url
     for _ in range(MAX_REDIRECTS + 1):
-        parsed = urlparse(current)
-        if parsed.scheme not in ("http", "https"):
-            raise ImageFetchError(
-                f"unsupported scheme {parsed.scheme!r}", transient=False
-            )
-        host = parsed.hostname
+        try:
+            parsed = urlparse(current)
+            scheme, host, port = parsed.scheme, parsed.hostname, parsed.port
+        except ValueError:
+            # urlparse().port raises on an out-of-range/non-numeric port.
+            raise ImageFetchError("malformed URL", transient=False)
+        if scheme not in ("http", "https"):
+            raise ImageFetchError(f"unsupported scheme {scheme!r}", transient=False)
         if not host:
             raise ImageFetchError("missing host", transient=False)
-        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        default_port = 443 if scheme == "https" else 80
+        port = port or default_port
 
         ips = await _resolve_public_ips(host)
         ip = ips[0]
         ip_authority = f"[{ip}]:{port}" if ":" in ip else f"{ip}:{port}"
         target = urlunparse(
-            (parsed.scheme, ip_authority, parsed.path or "/", parsed.params, parsed.query, "")
+            (scheme, ip_authority, parsed.path or "/", parsed.params, parsed.query, "")
         )
         host_hdr = f"[{host}]" if ":" in host else host
-        if port not in (80, 443):
+        if port != default_port:
             host_hdr = f"{host_hdr}:{port}"
         headers = {"Host": host_hdr, "User-Agent": USER_AGENT, "Accept": "image/*"}
 
@@ -186,9 +192,10 @@ async def _fetch_loop(url: str) -> tuple[bytes, str]:
                 current = urljoin(current, loc)
                 continue
             if resp.status_code >= 400:
-                raise ImageFetchError(
-                    f"HTTP {resp.status_code}", transient=resp.status_code >= 500
-                )
+                # 5xx and 429 (rate limited — the original wikimedia failure mode)
+                # are retry-later: short negative TTL. Other 4xx are deterministic.
+                transient = resp.status_code >= 500 or resp.status_code == 429
+                raise ImageFetchError(f"HTTP {resp.status_code}", transient=transient)
             buf = bytearray()
             async for chunk in resp.aiter_bytes():
                 buf += chunk
@@ -196,7 +203,7 @@ async def _fetch_loop(url: str) -> tuple[bytes, str]:
                     raise ImageFetchError(
                         f"exceeds {MAX_IMAGE_BYTES} bytes", transient=False
                     )
-            mime = _sniff_mime(bytes(buf))
+            mime = _sniff_mime(bytes(buf[:16]))  # magic bytes only — avoid a full copy
             if mime is None:
                 raise ImageFetchError("not a recognized image", transient=False)
             return bytes(buf), mime
@@ -207,12 +214,13 @@ logger = logging.getLogger(__name__)
 
 _positive: "OrderedDict[str, tuple[float, str, str]]" = OrderedDict()  # url -> (expiry, b64, mime)
 _positive_bytes = 0
-_negative: dict[str, tuple[float, str]] = {}  # url -> (expiry, reason)
+_negative: "OrderedDict[str, tuple[float, str]]" = OrderedDict()  # url -> (expiry, reason)
 _inflight: dict[str, asyncio.Future] = {}
 _cache_lock = asyncio.Lock()
 _fetch_semaphore = asyncio.Semaphore(GLOBAL_FETCH_CONCURRENCY)
-
-_stats = {"hits": 0, "misses": 0, "evictions": 0, "neg_hits": 0, "coalesced": 0}
+# Hold strong refs to detached fetch tasks; the loop only keeps weak ones, so
+# without this a task could be garbage-collected mid-flight (CPython docs).
+_background_tasks: "set[asyncio.Task]" = set()
 
 
 def _reset_cache_for_tests() -> None:
@@ -221,14 +229,17 @@ def _reset_cache_for_tests() -> None:
     _negative.clear()
     _inflight.clear()
     _positive_bytes = 0
-    for k in _stats:
-        _stats[k] = 0
 
 
 def _cache_put(url: str, b64: str, mime: str) -> None:
     global _positive_bytes
     size = len(b64)
-    now = asyncio.get_event_loop().time()
+    now = asyncio.get_running_loop().time()
+    # Drop expired entries so their bytes don't hold capacity against live ones
+    # (mirrors _cache_negative's sweep).
+    for k in [k for k, (exp, _b, _m) in _positive.items() if exp <= now]:
+        _positive_bytes -= len(_positive[k][1])
+        del _positive[k]
     old = _positive.pop(url, None)
     if old is not None:
         _positive_bytes -= len(old[1])
@@ -238,77 +249,99 @@ def _cache_put(url: str, b64: str, mime: str) -> None:
     while _positive_bytes > CACHE_MAX_BYTES and _positive:
         _, (_, old_b64, _m) = _positive.popitem(last=False)
         _positive_bytes -= len(old_b64)
-        _stats["evictions"] += 1
+
+
+def _cache_negative(url: str, ttl: float, reason: str) -> None:
+    # Purge expired entries, then bound the dict (FIFO) so a flood of distinct
+    # failing URLs can't grow it without limit.
+    now = asyncio.get_running_loop().time()
+    for k in [k for k, (exp, _r) in _negative.items() if exp <= now]:
+        del _negative[k]
+    _negative[url] = (now + ttl, reason)
+    _negative.move_to_end(url)
+    while len(_negative) > MAX_NEG_ENTRIES:
+        _negative.popitem(last=False)
+
+
+def _retrieve_future_exception(fut: asyncio.Future) -> None:
+    # If every waiter detached (all cancelled via asyncio.shield) the set exception
+    # would otherwise be logged as "never retrieved"; read it here to mark it seen.
+    if not fut.cancelled():
+        fut.exception()
 
 
 async def get_or_fetch(url: str) -> tuple[str, str]:
-    now = asyncio.get_event_loop().time()
+    now = asyncio.get_running_loop().time()
     async with _cache_lock:
         ent = _positive.get(url)
         if ent and ent[0] > now:
             _positive.move_to_end(url)
-            _stats["hits"] += 1
             return ent[1], ent[2]
         neg = _negative.get(url)
         if neg and neg[0] > now:
-            _stats["neg_hits"] += 1
             raise HTTPException(
                 status_code=HTTPStatus.BAD_REQUEST,
                 detail=f"Failed to fetch image URL {url}: {neg[1]}",
             )
         fut = _inflight.get(url)
         if fut is None:
-            _stats["misses"] += 1
-            fut = asyncio.get_event_loop().create_future()
+            fut = asyncio.get_running_loop().create_future()
+            fut.add_done_callback(_retrieve_future_exception)
             _inflight[url] = fut
-            asyncio.create_task(_run_fetch(url, fut))
-        else:
-            _stats["coalesced"] += 1
+            task = asyncio.create_task(_run_fetch(url, fut))
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
     return await asyncio.shield(fut)
 
 
 async def _run_fetch(url: str, fut: asyncio.Future) -> None:
     try:
-        async with _fetch_semaphore:
-            raw, mime = await _fetch_bytes(url)
-        b64 = base64.b64encode(raw).decode()
-    except ImageFetchError as e:
-        ttl = NEG_CACHE_TTL_TRANSIENT if e.transient else NEG_CACHE_TTL_DETERMINISTIC
-        async with _cache_lock:
-            _inflight.pop(url, None)
-            now_t = asyncio.get_event_loop().time()
-            for k in [k for k, (exp, _r) in _negative.items() if exp <= now_t]:
-                del _negative[k]
-            _negative[url] = (now_t + ttl, e.reason)
-        logger.warning("image fetch failed url=%s reason=%s transient=%s", url, e.reason, e.transient)
-        if not fut.done():
-            fut.set_exception(
-                HTTPException(
-                    status_code=HTTPStatus.BAD_REQUEST,
-                    detail=f"Failed to fetch image URL {url}: {e.reason}",
+        try:
+            async with _fetch_semaphore:
+                raw, mime = await _fetch_bytes(url)
+            b64 = base64.b64encode(raw).decode()
+        except ImageFetchError as e:
+            ttl = NEG_CACHE_TTL_TRANSIENT if e.transient else NEG_CACHE_TTL_DETERMINISTIC
+            async with _cache_lock:
+                _cache_negative(url, ttl, e.reason)
+            logger.warning("image fetch failed url=%s reason=%s transient=%s", url, e.reason, e.transient)
+            if not fut.done():
+                fut.set_exception(
+                    HTTPException(
+                        status_code=HTTPStatus.BAD_REQUEST,
+                        detail=f"Failed to fetch image URL {url}: {e.reason}",
+                    )
                 )
-            )
-        return
-    except Exception as e:  # unexpected — do not poison cache long-term
-        async with _cache_lock:
-            _inflight.pop(url, None)
-        logger.exception("unexpected image fetch error url=%s", url)
-        if not fut.done():
-            fut.set_exception(
-                HTTPException(
-                    status_code=HTTPStatus.BAD_REQUEST,
-                    detail=f"Failed to fetch image URL {url}: {type(e).__name__}",
+            return
+        except Exception as e:  # unexpected — brief negative TTL so a persistent
+            async with _cache_lock:  # bug can't drive a tight per-request refetch loop
+                _cache_negative(url, NEG_CACHE_TTL_UNEXPECTED, type(e).__name__)
+            logger.exception("unexpected image fetch error url=%s", url)
+            if not fut.done():
+                fut.set_exception(
+                    HTTPException(
+                        status_code=HTTPStatus.BAD_REQUEST,
+                        detail=f"Failed to fetch image URL {url}: {type(e).__name__}",
+                    )
                 )
-            )
-        return
-    async with _cache_lock:
-        _inflight.pop(url, None)
-        _cache_put(url, b64, mime)
-    if not fut.done():
-        fut.set_result((b64, mime))
+            return
+        async with _cache_lock:
+            _negative.pop(url, None)  # a fresh success clears any stale negative entry
+            _cache_put(url, b64, mime)
+        if not fut.done():
+            fut.set_result((b64, mime))
+    finally:
+        # Always free the inflight slot — even on CancelledError (a BaseException the
+        # excepts above don't catch) — so a cancelled fetch can't leave the URL wedged
+        # with an unresolved future that future waiters would block on forever.
+        async with _cache_lock:
+            if _inflight.get(url) is fut:
+                del _inflight[url]
+        if not fut.done():
+            fut.cancel()
 
 
-async def inline_remote_images(full_path: str, body_json: dict) -> tuple[dict, bool]:
+async def inline_remote_images(body_json: dict) -> tuple[dict, bool]:
     parts = _collect_image_parts(body_json)
     if not parts:
         return body_json, False
