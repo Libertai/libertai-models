@@ -99,9 +99,12 @@ def _rewrite(part: "_ImagePart", b64: str, mime: str) -> None:
         part.part["source"] = {"type": "base64", "media_type": mime, "data": b64}
 
 
+# No keep-alive: connections are pinned to a validated IP, so a pooled TLS
+# session for one hostname must not be reused for another host on the same IP.
 _fetch_client = httpx.AsyncClient(
     follow_redirects=False,
     timeout=None,
+    limits=httpx.Limits(max_keepalive_connections=0),
 )
 
 
