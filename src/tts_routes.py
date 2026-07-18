@@ -6,7 +6,7 @@ from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
-from src.api_keys import KeysManager
+from src.api_keys import check_api_key
 from src.config import AudioModelConfig, config
 from src.interfaces.usage import AudioUsage, AudioUsageFullData, UserContext
 from src.tts_generation import TTSModelManager, synthesize_wav
@@ -14,7 +14,6 @@ from src.usage import report_usage_event_task
 
 router = APIRouter(tags=["Audio"])
 security = HTTPBearer()
-keys_manager = KeysManager()
 tts_manager = TTSModelManager()
 
 # Register audio model configs at import
@@ -35,9 +34,7 @@ class SpeechRequest(BaseModel):
     speed: float = 1.0
 
 
-def _validate(body: SpeechRequest, token: str) -> AudioModelConfig:
-    if not keys_manager.key_exists(token):
-        raise HTTPException(status_code=HTTPStatus.UNAUTHORIZED, detail="Invalid API key")
+def _validate(body: SpeechRequest) -> AudioModelConfig:
     if body.model not in config.MODEL_CONFIGS:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=f"Model '{body.model}' not found")
     model_config = config.MODEL_CONFIGS[body.model]
@@ -80,7 +77,9 @@ async def create_speech(
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> Response:
     token = credentials.credentials
-    model_config = _validate(body, token)
+    if (key_error := check_api_key(token)) is not None:
+        return key_error
+    model_config = _validate(body)
     voice = body.voice or model_config.default_voice
 
     def _blocking() -> bytes:

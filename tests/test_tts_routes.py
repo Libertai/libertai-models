@@ -2,6 +2,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from src.api_keys import KeysManager
 from src.config import AudioModelConfig
 import src.tts_routes as tts_routes
 
@@ -15,7 +16,7 @@ def client(monkeypatch):
         default_voice="af_heart",
     )
     monkeypatch.setattr(tts_routes.config, "MODEL_CONFIGS", {"kokoro": cfg})
-    monkeypatch.setattr(tts_routes.keys_manager, "key_exists", lambda token: token == "good")
+    KeysManager().reset_keys({"good"})
     app = FastAPI()
     app.include_router(tts_routes.router)
     return TestClient(app)

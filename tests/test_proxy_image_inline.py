@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException
 from starlette.testclient import TestClient
 
 import src.proxy as proxy
+from src.api_keys import KeysManager
 from src.config import TextModelConfig
 
 
@@ -18,8 +19,8 @@ def client_and_capture(monkeypatch):
         allowed_paths=["v1/chat/completions", "v1/completions", "v1/messages", "v1/responses"],
     )
     monkeypatch.setitem(proxy.config.MODEL_CONFIGS, "visionmodel", model)
-    # Accept any bearer token; skip real usage reporting.
-    monkeypatch.setattr(proxy.keys_manager, "key_exists", lambda token: True)
+    # Accept the "k" bearer token used by every test in this file; skip real usage reporting.
+    KeysManager().reset_keys({"k"})
     monkeypatch.setattr(proxy, "report_usage_event_task", lambda *a, **k: None)
 
     captured: dict = {}
