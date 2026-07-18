@@ -9,7 +9,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
-from src.api_keys import KeysManager
+from src.api_keys import check_api_key
 from src.config import (
     AudioModelConfig,
     EmbeddingModelConfig,
@@ -27,7 +27,6 @@ from src.usage import report_usage_event_task, extract_usage_info_from_raw, extr
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Proxy service"])
-keys_manager = KeysManager()
 security = HTTPBearer()
 
 timeout = httpx.Timeout(timeout=600.0)  # 10 minutes
@@ -147,8 +146,8 @@ async def proxy_request(
     background_tasks: BackgroundTasks,
 ):
     token = credentials.credentials
-    if not keys_manager.key_exists(token):
-        raise HTTPException(status_code=HTTPStatus.UNAUTHORIZED, detail="Invalid API key")
+    if (key_error := check_api_key(token)) is not None:
+        return key_error
 
     # Get model from request
     model_name = proxy_request_data.model

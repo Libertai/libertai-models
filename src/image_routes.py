@@ -9,7 +9,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
-from src.api_keys import KeysManager
+from src.api_keys import check_api_key
 from src.config import ImageEditModelConfig, ImageModelConfig, config
 from src.image_generation import ImageModelManager, edit_image, generate_image
 from src.interfaces.usage import ImageUsage, ImageUsageFullData, UserContext
@@ -17,7 +17,6 @@ from src.usage import report_usage_event_task
 
 router = APIRouter(tags=["Image Generation"])
 security = HTTPBearer()
-keys_manager = KeysManager()
 image_manager = ImageModelManager()
 
 # Register image model configs
@@ -65,12 +64,8 @@ def validate_cfg_scale(cfg_scale: float) -> None:
         raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="cfg_scale must be non-negative")
 
 
-def validate_model_and_endpoint(model_name: str, endpoint: str, token: str) -> ImageModelConfig | ImageEditModelConfig:
-    """Validate API key, model existence, model type, and endpoint path"""
-    # Auth validation
-    if not keys_manager.key_exists(token):
-        raise HTTPException(status_code=HTTPStatus.UNAUTHORIZED, detail="Invalid API key")
-
+def validate_model_and_endpoint(model_name: str, endpoint: str) -> ImageModelConfig | ImageEditModelConfig:
+    """Validate model existence, model type, and endpoint path. Auth is checked by the caller."""
     # Model existence
     if model_name not in config.MODEL_CONFIGS:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=f"Model '{model_name}' not found")
@@ -177,7 +172,9 @@ async def generate_image_openai(
     payment_requirements = raw_request.headers.get("x-payment-requirements") or None
 
     # Validate model and endpoint
-    validate_model_and_endpoint(request.model, "v1/images/generations", token)
+    if (key_error := check_api_key(token)) is not None:
+        return key_error
+    validate_model_and_endpoint(request.model, "v1/images/generations")
 
     # Validate parameters
     if request.n < 1 or request.n > MAX_IMAGES:
@@ -285,7 +282,9 @@ async def edit_image_openai(
 
     # Validate
     validate_prompt(prompt)
-    validate_model_and_endpoint(model_name, "v1/images/edits", token)
+    if (key_error := check_api_key(token)) is not None:
+        return key_error
+    validate_model_and_endpoint(model_name, "v1/images/edits")
 
     if n < 1 or n > MAX_IMAGES:
         raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=f"n must be between 1 and {MAX_IMAGES}")
@@ -382,7 +381,9 @@ async def generate_image_a1111(
     payment_requirements = raw_request.headers.get("x-payment-requirements") or None
 
     # Validate model and endpoint
-    validate_model_and_endpoint(request.model, "sdapi/v1/txt2img", token)
+    if (key_error := check_api_key(token)) is not None:
+        return key_error
+    validate_model_and_endpoint(request.model, "sdapi/v1/txt2img")
 
     # Validate input parameters
     validate_prompt(request.prompt)
