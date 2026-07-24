@@ -109,7 +109,7 @@ def track_usage(
         )
         background_tasks.add_task(report_usage_event_task, usage_data)
     except Exception as e:
-        print(f"Exception occurred during usage report: {str(e)}")
+        print(f"Exception occurred during usage report: {e!s}")
 
 
 # OpenAI format models
@@ -241,7 +241,7 @@ async def generate_image_openai(
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         print(f"Unexpected error generating image: {e}")
-        raise HTTPException(status_code=500, detail=f"Error generating image: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error generating image: {e!s}")
 
 
 @router.post("/v1/images/edits", response_model=OpenAIImageResponse)
@@ -365,7 +365,7 @@ async def edit_image_openai(
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         print(f"Unexpected error editing image: {e}")
-        raise HTTPException(status_code=500, detail=f"Error editing image: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error editing image: {e!s}")
 
 
 @router.post("/sdapi/v1/txt2img", response_model=A1111Response)
@@ -444,4 +444,4 @@ async def generate_image_a1111(
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         print(f"Unexpected error generating image: {e}")
-        raise HTTPException(status_code=500, detail=f"Error generating image: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error generating image: {e!s}")

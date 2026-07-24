@@ -1,4 +1,5 @@
 from http import HTTPStatus
+from typing import ClassVar
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
@@ -10,18 +11,19 @@ from src.cryptography import verify_signed_payload
 
 class KeysManager:
     _instance = None
-    keys: set[str] = set()
+    keys: ClassVar[set[str]] = set()
     # key -> {"reason": str, "message": str} for real-but-unusable keys (limits/credits/disabled)
-    invalid_keys: dict[str, dict] = {}
+    invalid_keys: ClassVar[dict[str, dict]] = {}
 
     def __new__(cls, *args, **kwargs):
         if not cls._instance:
-            cls._instance = super(KeysManager, cls).__new__(cls, *args, **kwargs)
+            cls._instance = super().__new__(cls, *args, **kwargs)
         return cls._instance
 
     def reset_keys(self, new_keys: set[str], invalid_keys: dict[str, dict] | None = None):
-        self.keys = new_keys
-        self.invalid_keys = invalid_keys or {}
+        # singleton: reassign via the class, not self, since keys/invalid_keys are ClassVars
+        KeysManager.keys = new_keys
+        KeysManager.invalid_keys = invalid_keys or {}
 
     def key_exists(self, key):
         return key in self.keys
@@ -78,4 +80,4 @@ async def receive_api_keys(payload: EncryptedApiKeysPayload):
         return {"status": "success", "keys_received": keys_received}
 
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Error processing encrypted keys: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Error processing encrypted keys: {e!s}")

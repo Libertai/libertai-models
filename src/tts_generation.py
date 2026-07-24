@@ -1,6 +1,6 @@
 import io
 import threading
-from typing import Any, Optional
+from typing import Any, ClassVar, Optional
 
 try:
     import numpy as np
@@ -26,19 +26,17 @@ class TTSModelManager:
     """
 
     _instance: Optional["TTSModelManager"] = None
-    _pipelines: dict[str, Any] = {}
-    _refcounts: dict[str, int] = {}
-    _model_configs: dict[str, Any] = {}  # AudioModelConfig
-    _inference_locks: dict[str, threading.Lock] = {}
+    _pipelines: ClassVar[dict[str, Any]] = {}
+    _refcounts: ClassVar[dict[str, int]] = {}
+    _model_configs: ClassVar[dict[str, Any]] = {}  # AudioModelConfig
+    _inference_locks: ClassVar[dict[str, threading.Lock]] = {}
     _lock: threading.Lock = threading.Lock()
 
     def __new__(cls) -> "TTSModelManager":
+        # dict/lock ClassVars are already fresh {} at class-definition time; this is a
+        # singleton (created once), so no per-instance re-init is needed here.
         if cls._instance is None:
             cls._instance = super().__new__(cls)
-            cls._instance._pipelines = {}
-            cls._instance._refcounts = {}
-            cls._instance._model_configs = {}
-            cls._instance._inference_locks = {}
         return cls._instance
 
     def register(self, model_id: str, model_config: Any) -> None:

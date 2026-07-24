@@ -67,7 +67,7 @@ def _track_usage(token: str, model_name: str, character_count: int, background_t
         )
         background_tasks.add_task(report_usage_event_task, usage_data)
     except Exception as e:
-        print(f"Exception occurred during usage report: {str(e)}")
+        print(f"Exception occurred during usage report: {e!s}")
 
 
 @router.post("/v1/audio/speech")
@@ -94,7 +94,7 @@ async def create_speech(
     try:
         wav_bytes = await loop.run_in_executor(None, _blocking)
     except Exception as e:
-        raise HTTPException(status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail=f"TTS synthesis failed: {str(e)}")
+        raise HTTPException(status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail=f"TTS synthesis failed: {e!s}")
 
     _track_usage(token, body.model, len(body.input), background_tasks)
     return Response(content=wav_bytes, media_type="audio/wav")

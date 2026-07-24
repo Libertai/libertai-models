@@ -5,7 +5,7 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from starlette.testclient import TestClient
 
-import src.proxy as proxy
+from src import proxy
 from src.api_keys import KeysManager
 from src.config import TextModelConfig
 
@@ -158,7 +158,7 @@ def test_stream_and_inline_both_applied(client_and_capture, monkeypatch):
 
 
 def test_v1_completions_is_not_inlined(client_and_capture, monkeypatch):
-    tc, captured = client_and_capture
+    tc, _captured = client_and_capture
     calls = {"n": 0}
 
     async def counting_inline(body_json):

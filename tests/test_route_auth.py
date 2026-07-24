@@ -4,9 +4,7 @@ import pytest
 from fastapi import FastAPI
 from starlette.testclient import TestClient
 
-import src.image_routes as image_routes
-import src.proxy as proxy
-import src.tts_routes as tts_routes
+from src import image_routes, proxy, tts_routes
 from src.api_keys import KeysManager
 
 BLOCKED_KEY = "blocked"

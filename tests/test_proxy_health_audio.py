@@ -2,8 +2,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from src import proxy
 from src.config import AudioModelConfig
-import src.proxy as proxy
 
 
 @pytest.fixture

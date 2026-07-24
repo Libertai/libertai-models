@@ -22,7 +22,7 @@ from src.image_fetch import IMAGE_INLINE_PATHS, aclose_client, inline_remote_ima
 from src.image_generation import ImageModelManager
 from src.interfaces.usage import TextUsageFullData, UserContext
 from src.tts_generation import TTSModelManager
-from src.usage import report_usage_event_task, extract_usage_info_from_raw, extract_usage_info
+from src.usage import extract_usage_info, extract_usage_info_from_raw, report_usage_event_task
 
 logger = logging.getLogger(__name__)
 

@@ -8,8 +8,8 @@ from fastapi import HTTPException
 
 import src.image_fetch as imgf
 from src.image_fetch import (
-    _ImagePart,
     _collect_image_parts,
+    _ImagePart,
     _is_public_ip,
     _rewrite,
     _sniff_mime,
@@ -506,7 +506,7 @@ async def test_fetch_relative_redirect(monkeypatch):
         return httpx.Response(200, content=PNG)
 
     monkeypatch.setattr(imgf, "_fetch_client", _mock_client(handler))
-    raw, mime = await imgf._fetch_bytes("https://example.com/dir/a.png")
+    _raw, mime = await imgf._fetch_bytes("https://example.com/dir/a.png")
     assert mime == "image/png"
 
 

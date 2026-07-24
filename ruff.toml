@@ -1,2 +1,8 @@
-# Set the maximum line length to 79.
 line-length = 119
+
+[lint]
+ignore = [
+    "B008",   # FastAPI's Depends() in function defaults is the framework idiom
+    "BLE001", # route/service boundaries deliberately catch broad Exception and log
+    "PYI034", # singleton __new__ returns cls._instance typed Optional[X]; `Self` fights mypy's flow analysis here
+]

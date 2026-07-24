@@ -1,7 +1,7 @@
 import base64
 import io
 import threading
-from typing import Any, Optional
+from typing import Any, ClassVar, Optional
 
 try:
     import torch
@@ -17,7 +17,8 @@ except ImportError:
 
 # Optional: background removal
 try:
-    from rembg import remove as remove_bg, new_session  # type: ignore
+    from rembg import new_session  # type: ignore
+    from rembg import remove as remove_bg  # type: ignore
 
     # Force CPU for rembg to avoid GPU memory conflicts with the main model
     REMBG_SESSION = new_session("u2net", providers=["CPUExecutionProvider"])
@@ -32,20 +33,18 @@ class ImageModelManager:
     """Singleton managing image pipelines (generation + editing) with on-demand loading."""
 
     _instance: Optional["ImageModelManager"] = None
-    _pipelines: dict[str, Any] = {}
-    _refcounts: dict[str, int] = {}
-    _model_configs: dict[str, Any] = {}  # ImageModelConfig | ImageEditModelConfig
-    _inference_locks: dict[str, threading.Lock] = {}
+    _pipelines: ClassVar[dict[str, Any]] = {}
+    _refcounts: ClassVar[dict[str, int]] = {}
+    _model_configs: ClassVar[dict[str, Any]] = {}  # ImageModelConfig | ImageEditModelConfig
+    _inference_locks: ClassVar[dict[str, threading.Lock]] = {}
     _device: str = "cuda" if DIFFUSERS_AVAILABLE and torch.cuda.is_available() else "cpu"
     _lock: threading.Lock = threading.Lock()
 
     def __new__(cls) -> "ImageModelManager":
+        # dict/lock ClassVars are already fresh {} at class-definition time; this is a
+        # singleton (created once), so no per-instance re-init is needed here.
         if cls._instance is None:
             cls._instance = super().__new__(cls)
-            cls._instance._pipelines = {}
-            cls._instance._refcounts = {}
-            cls._instance._model_configs = {}
-            cls._instance._inference_locks = {}
         return cls._instance
 
     def register(self, model_id: str, model_config: Any) -> None:

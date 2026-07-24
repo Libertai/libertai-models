@@ -2,9 +2,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from src import tts_routes
 from src.api_keys import KeysManager
 from src.config import AudioModelConfig
-import src.tts_routes as tts_routes
 
 
 @pytest.fixture

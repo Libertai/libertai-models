@@ -1,6 +1,7 @@
 import json
 import re
-from typing import Any, Iterator
+from collections.abc import Iterator
+from typing import Any
 
 import httpx
 
@@ -72,7 +73,7 @@ async def report_usage_event_task(usage: TextUsageFullData | ImageUsageFullData 
                 print(f"Error reporting usage: {response.status_code}")
 
     except Exception as e:
-        print(f"Exception occurred during usage report {str(e)}")
+        print(f"Exception occurred during usage report {e!s}")
 
 
 def extract_usage_info_from_raw(raw_data: bytes, context: UserContext) -> Usage:
