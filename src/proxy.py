@@ -232,15 +232,25 @@ async def proxy_request(
         if response.status_code >= 400:
             error_body = await response.aread()
             await response.aclose()
-            # Try to forward the original error from llama.cpp
-            try:
-                error_json = json.loads(error_body)
-                detail = error_json.get("error", {}).get("message", error_body.decode(errors="replace"))
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                detail = (
-                    error_body.decode(errors="replace") if error_body else f"Upstream returned {response.status_code}"
-                )
-            raise HTTPException(status_code=response.status_code, detail=detail)
+            # Forward the upstream error envelope byte-for-byte: OpenAI SDKs read
+            # error.message/type/param, all of which unwrapping into FastAPI's
+            # {"detail": ...} throws away. aread() has already decoded any
+            # content-encoding, so only Content-Type is safe to carry over.
+            if not error_body:
+                error_body = json.dumps(
+                    {
+                        "error": {
+                            "message": f"Upstream returned {response.status_code}",
+                            "type": "upstream_error",
+                            "code": response.status_code,
+                        }
+                    }
+                ).encode()
+            return Response(
+                content=error_body,
+                status_code=response.status_code,
+                media_type=response.headers.get("Content-Type", "application/json"),
+            )
 
         is_streaming_response = "text/event-stream" in response.headers.get("content-type", "")
 
