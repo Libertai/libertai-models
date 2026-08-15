@@ -6,17 +6,15 @@ from http import HTTPStatus
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
-from src.api_keys import check_api_key
+from src.api_keys import check_api_key, require_api_key
 from src.config import ImageEditModelConfig, ImageModelConfig, config
 from src.image_generation import ImageModelManager, edit_image, generate_image
 from src.interfaces.usage import ImageUsage, ImageUsageFullData, UserContext
 from src.usage import report_usage_event_task
 
 router = APIRouter(tags=["Image Generation"])
-security = HTTPBearer()
 image_manager = ImageModelManager()
 
 # Register image model configs
@@ -162,12 +160,11 @@ class A1111Response(BaseModel):
 @router.post("/v1/images/generations", response_model=OpenAIImageResponse)
 async def generate_image_openai(
     request: OpenAIImageRequest,
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)],
+    token: Annotated[str, Depends(require_api_key)],
     background_tasks: BackgroundTasks,
     raw_request: Request,
 ):
     """OpenAI-compatible image generation endpoint"""
-    token = credentials.credentials
     payment_payload = raw_request.headers.get("x-payment") or None
     payment_requirements = raw_request.headers.get("x-payment-requirements") or None
 
@@ -248,10 +245,9 @@ async def generate_image_openai(
 async def edit_image_openai(
     raw_request: Request,
     background_tasks: BackgroundTasks,
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)],
+    token: Annotated[str, Depends(require_api_key)],
 ):
     """OpenAI-compatible image editing endpoint (multipart/form-data)"""
-    token = credentials.credentials
 
     # Parse multipart form data
     form = await raw_request.form()
@@ -371,12 +367,11 @@ async def edit_image_openai(
 @router.post("/sdapi/v1/txt2img", response_model=A1111Response)
 async def generate_image_a1111(
     request: A1111Request,
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)],
+    token: Annotated[str, Depends(require_api_key)],
     background_tasks: BackgroundTasks,
     raw_request: Request,
 ):
     """AUTOMATIC1111-compatible txt2img endpoint"""
-    token = credentials.credentials
     payment_payload = raw_request.headers.get("x-payment") or None
     payment_requirements = raw_request.headers.get("x-payment-requirements") or None
 

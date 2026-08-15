@@ -1,19 +1,18 @@
 import asyncio
 from http import HTTPStatus
+from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import Response
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
-from src.api_keys import check_api_key
+from src.api_keys import check_api_key, require_api_key
 from src.config import AudioModelConfig, config
 from src.interfaces.usage import AudioUsage, AudioUsageFullData, UserContext
 from src.tts_generation import TTSModelManager, synthesize_wav
 from src.usage import report_usage_event_task
 
 router = APIRouter(tags=["Audio"])
-security = HTTPBearer()
 tts_manager = TTSModelManager()
 
 # Register audio model configs at import
@@ -74,9 +73,8 @@ def _track_usage(token: str, model_name: str, character_count: int, background_t
 async def create_speech(
     body: SpeechRequest,
     background_tasks: BackgroundTasks,
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    token: Annotated[str, Depends(require_api_key)],
 ) -> Response:
-    token = credentials.credentials
     if (key_error := check_api_key(token)) is not None:
         return key_error
     model_config = _validate(body)

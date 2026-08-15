@@ -6,10 +6,9 @@ from typing import Annotated
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
-from src.api_keys import check_api_key
+from src.api_keys import check_api_key, require_api_key
 from src.config import (
     AudioModelConfig,
     EmbeddingModelConfig,
@@ -27,7 +26,6 @@ from src.usage import extract_usage_info, extract_usage_info_from_raw, report_us
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Proxy service"])
-security = HTTPBearer()
 
 timeout = httpx.Timeout(timeout=600.0)  # 10 minutes
 limits = httpx.Limits(
@@ -142,10 +140,9 @@ async def proxy_request(
     full_path: str,
     request: Request,
     proxy_request_data: ProxyRequest,
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)],
+    token: Annotated[str, Depends(require_api_key)],
     background_tasks: BackgroundTasks,
 ):
-    token = credentials.credentials
     if (key_error := check_api_key(token)) is not None:
         return key_error
 

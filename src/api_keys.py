@@ -1,7 +1,8 @@
+from collections.abc import Mapping
 from http import HTTPStatus
 from typing import ClassVar
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -35,6 +36,25 @@ def apply_key_payload(decrypted_data: dict) -> int:
     invalid_keys = decrypted_data.get("invalid_keys") or {}
     KeysManager().reset_keys(set(keys), dict(invalid_keys))
     return len(keys)
+
+
+def extract_api_key(headers: Mapping[str, str]) -> str | None:
+    """API key from `Authorization: Bearer <key>` or `x-api-key`.
+
+    The Anthropic SDKs only ever send `x-api-key`; OpenAI-shaped clients send the
+    bearer. Authorization wins when both are present.
+    """
+    auth_header = headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        auth_header = auth_header[7:]
+    return auth_header.strip() or headers.get("x-api-key", "").strip() or None
+
+
+async def require_api_key(request: Request) -> str:
+    token = extract_api_key(request.headers)
+    if token is None:
+        raise HTTPException(status_code=HTTPStatus.UNAUTHORIZED, detail="Not authenticated")
+    return token
 
 
 def check_api_key(token: str) -> JSONResponse | None:
