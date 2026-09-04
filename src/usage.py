@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from src.api_keys import KeysManager
 from src.config import config
 from src.interfaces.usage import AudioUsageFullData, ImageUsageFullData, TextUsageFullData, Usage, UserContext
 
@@ -62,6 +63,17 @@ def _iter_json_at_key(text: str, key: str) -> Iterator[dict]:
                     break
 
 
+def apply_usage_report(key: str, body: Any) -> None:
+    """Drop a key the backend reports as unusable now that this call is metered.
+
+    Billing is post-hoc, so without this the key stays servable until the next key
+    distribution and every call in between is free.
+    """
+    invalid = body.get("invalid") if isinstance(body, dict) else None
+    if isinstance(invalid, dict):
+        KeysManager().block_key(key, invalid)
+
+
 async def report_usage_event_task(usage: TextUsageFullData | ImageUsageFullData | AudioUsageFullData):
     print(f"Collecting usage {usage}")
     try:
@@ -71,6 +83,8 @@ async def report_usage_event_task(usage: TextUsageFullData | ImageUsageFullData 
             response = await client.post(f"{config.BACKEND_URL}/{path}", json=usage.model_dump())
             if response.status_code != 200:
                 print(f"Error reporting usage: {response.status_code}")
+                return
+            apply_usage_report(usage.key, response.json())
 
     except Exception as e:
         print(f"Exception occurred during usage report {e!s}")
