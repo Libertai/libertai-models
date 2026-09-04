@@ -29,6 +29,14 @@ class KeysManager:
     def key_exists(self, key):
         return key in self.keys
 
+    def block_key(self, key: str, info: dict) -> None:
+        """Move a key to the invalid map until the next distribution overwrites both.
+
+        Rebinds instead of mutating: requests read these while this runs.
+        """
+        KeysManager.keys = self.keys - {key}
+        KeysManager.invalid_keys = {**self.invalid_keys, key: info}
+
 
 def apply_key_payload(decrypted_data: dict) -> int:
     """Update the KeysManager from a decrypted distribution payload; returns valid-key count."""
