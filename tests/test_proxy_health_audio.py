@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src import proxy
+from src.api_keys import KeysManager
 from src.config import AudioModelConfig
 
 
@@ -15,6 +16,7 @@ def client(monkeypatch):
         default_voice="af_heart",
     )
     monkeypatch.setattr(proxy.config, "MODEL_CONFIGS", {"kokoro": cfg})
+    monkeypatch.setattr(KeysManager, "keys", {"k"})
     proxy._tts_manager.register("kokoro", cfg)
     app = FastAPI()
     app.include_router(proxy.router)
@@ -39,3 +41,10 @@ def test_health_audio_loaded_returns_200(client, monkeypatch):
     r = client.get("/health/kokoro")
     assert r.status_code == 200
     assert r.json()["status"] == "ok"
+
+
+def test_health_without_keys_returns_503(client, monkeypatch):
+    monkeypatch.setattr(KeysManager, "keys", set())
+    monkeypatch.setattr(proxy._tts_manager, "is_loaded", lambda m: True)
+    r = client.get("/health/kokoro")
+    assert r.status_code == 503

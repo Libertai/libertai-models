@@ -8,7 +8,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request,
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from src.api_keys import check_api_key, require_api_key
+from src.api_keys import KeysManager, check_api_key, require_api_key
 from src.config import (
     AudioModelConfig,
     EmbeddingModelConfig,
@@ -68,6 +68,16 @@ async def shutdown_event():
 async def proxy_health(request: Request, model_name: str):
     if model_name not in config.MODEL_CONFIGS:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=f"Model '{model_name}' not configured")
+
+    # Keys live in memory and arrive by push from libertai-api, so a fresh or
+    # restarted gateway would 401 every request until then. Unhealthy keeps it
+    # out of the healthy tier libertai-api routes to first.
+    if not KeysManager().keys:
+        return Response(
+            content=json.dumps({"status": "error", "detail": "No API keys received yet"}).encode(),
+            status_code=503,
+            media_type="application/json",
+        )
 
     model_config = config.MODEL_CONFIGS[model_name]
 
