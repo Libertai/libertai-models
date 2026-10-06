@@ -48,6 +48,21 @@ def test_stream_without_cached_tokens():
     assert extract_usage_info_from_raw(raw, CTX).cached_tokens == 0
 
 
+def test_stream_usage_on_every_chunk_uses_final():
+    # vLLM --enable-force-include-usage: cumulative usage on every chunk, cached details only on the last
+    chunks = [
+        {"choices": [{"delta": {"role": "assistant"}}], "usage": {"prompt_tokens": 100, "completion_tokens": 0}},
+        {"choices": [{"delta": {"content": "hi"}}], "usage": {"prompt_tokens": 100, "completion_tokens": 5}},
+        {
+            "choices": [],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 10, "prompt_tokens_details": {"cached_tokens": 64}},
+        },
+    ]
+    raw = "".join(f"data: {json.dumps(c)}\n\n" for c in chunks).encode() + b"data: [DONE]\n\n"
+    u = extract_usage_info_from_raw(raw, CTX)
+    assert (u.input_tokens, u.output_tokens, u.cached_tokens) == (100, 10, 64)
+
+
 ANTHROPIC_CTX = UserContext(key="k", model_name="glm-5.2", endpoint="v1/messages")
 
 

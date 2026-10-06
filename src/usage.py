@@ -146,13 +146,17 @@ def extract_usage_info_from_raw(raw_data: bytes, context: UserContext) -> Usage:
         # vLLM / OpenAI standard: final SSE chunk has {"usage": {"prompt_tokens": .., "completion_tokens": .., "total_tokens": ..}}
         # when stream_options.include_usage=true (we force-inject this in proxy).
         # May include nested prompt_tokens_details on newer vLLM, so brace-aware extract.
+        # With --enable-force-include-usage vLLM puts cumulative usage on every chunk, so the last one wins.
+        last = None
         for usage_json in _iter_json_at_key(text, "usage"):
             if "prompt_tokens" in usage_json or "completion_tokens" in usage_json:
-                return Usage(
-                    input_tokens=int(usage_json.get("prompt_tokens", 0)),
-                    output_tokens=int(usage_json.get("completion_tokens", 0)),
-                    cached_tokens=_extract_cached_tokens(usage_json),
-                )
+                last = usage_json
+        if last is not None:
+            return Usage(
+                input_tokens=int(last.get("prompt_tokens", 0)),
+                output_tokens=int(last.get("completion_tokens", 0)),
+                cached_tokens=_extract_cached_tokens(last),
+            )
 
         # llama.cpp: usage is embedded as a "timings" object in the final chunk
         for timings_json in _iter_json_at_key(text, "timings"):
