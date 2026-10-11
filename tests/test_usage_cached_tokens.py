@@ -92,3 +92,56 @@ def test_anthropic_stream_legacy_no_cache_fields():
     raw = (f"event: message_start\ndata: {json.dumps(start)}\n\nevent: message_delta\ndata: {json.dumps(delta)}\n\n").encode()
     u = extract_usage_info_from_raw(raw, ANTHROPIC_CTX)
     assert (u.input_tokens, u.output_tokens, u.cached_tokens) == (100, 10, 0)
+
+
+MSG_CTX = UserContext(key="k", model_name="glm-5.3-flash", endpoint="v1/messages")
+
+
+def _sse(events: list[dict]) -> bytes:
+    return "".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in events).encode()
+
+
+def test_messages_stream_cached_prompt_not_double_counted():
+    # vLLM: message_start has the whole prompt as input_tokens, message_delta splits off the cache hit
+    raw = _sse(
+        [
+            {"type": "message_start", "message": {"usage": {"input_tokens": 32428, "output_tokens": 0}}},
+            {
+                "type": "message_delta",
+                "usage": {
+                    "input_tokens": 0,
+                    "output_tokens": 285,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 32428,
+                },
+            },
+        ]
+    )
+    u = extract_usage_info_from_raw(raw, MSG_CTX)
+    assert (u.input_tokens, u.output_tokens, u.cached_tokens) == (32428, 285, 32428)
+
+
+def test_messages_stream_partial_cache_hit():
+    raw = _sse(
+        [
+            {"type": "message_start", "message": {"usage": {"input_tokens": 58163, "output_tokens": 0}}},
+            {
+                "type": "message_delta",
+                "usage": {"input_tokens": 9011, "output_tokens": 622, "cache_read_input_tokens": 49152},
+            },
+        ]
+    )
+    u = extract_usage_info_from_raw(raw, MSG_CTX)
+    assert (u.input_tokens, u.output_tokens, u.cached_tokens) == (58163, 622, 49152)
+
+
+def test_messages_stream_delta_without_input_keeps_start():
+    # Older servers: message_delta carries only output_tokens
+    raw = _sse(
+        [
+            {"type": "message_start", "message": {"usage": {"input_tokens": 500, "output_tokens": 1}}},
+            {"type": "message_delta", "usage": {"output_tokens": 42}},
+        ]
+    )
+    u = extract_usage_info_from_raw(raw, MSG_CTX)
+    assert (u.input_tokens, u.output_tokens, u.cached_tokens) == (500, 42, 0)

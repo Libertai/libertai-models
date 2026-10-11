@@ -107,18 +107,21 @@ def extract_usage_info_from_raw(raw_data: bytes, context: UserContext) -> Usage:
         raise ValueError("Unable to decode raw response content")
 
     if context.endpoint == "v1/messages":
-        # message_start and message_delta both carry cumulative usage, so max (not sum).
-        input_tokens = output_tokens = cache_read = cache_creation = 0
-        seen = False
+        # message_start and message_delta both carry cumulative usage, so the latest value of
+        # each field wins (not sum, not max). vLLM's message_start reports the whole prompt as
+        # input_tokens while message_delta splits it into input_tokens (uncached) + cache_read;
+        # taking the max of each field would bill the cached part twice.
+        fields: dict[str, int] = {}
         for usage_json in _iter_json_at_key(text, "usage"):
-            seen = True
-            input_tokens = max(input_tokens, int(usage_json.get("input_tokens", 0)))
-            output_tokens = max(output_tokens, int(usage_json.get("output_tokens", 0)))
-            cr, cc = _anthropic_cache_tokens(usage_json)
-            cache_read = max(cache_read, cr)
-            cache_creation = max(cache_creation, cc)
+            for name in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"):
+                if usage_json.get(name) is not None:
+                    fields[name] = int(usage_json[name])
 
-        if seen:
+        if fields:
+            input_tokens = fields.get("input_tokens", 0)
+            output_tokens = fields.get("output_tokens", 0)
+            cache_read = fields.get("cache_read_input_tokens", 0)
+            cache_creation = fields.get("cache_creation_input_tokens", 0)
             return Usage(
                 input_tokens=input_tokens + cache_read + cache_creation,
                 output_tokens=output_tokens,
