@@ -50,3 +50,26 @@ def test_rejects_non_wav_format(client):
 def test_rejects_out_of_range_speed(client):
     r = _post(client, {"model": "kokoro", "input": "hi", "speed": 9.0})
     assert r.status_code == 400
+
+
+def test_usage_report_carries_x402_payment(client, monkeypatch):
+    reported = []
+
+    async def _report(usage):
+        reported.append(usage)
+
+    monkeypatch.setattr(tts_routes, "report_usage_event_task", _report)
+    monkeypatch.setattr(tts_routes.tts_manager, "acquire", lambda model: (None, __import__("threading").Lock()))
+    monkeypatch.setattr(tts_routes.tts_manager, "release", lambda model: None)
+    monkeypatch.setattr(tts_routes, "synthesize_wav", lambda *args: b"RIFF")
+
+    r = client.post(
+        "/v1/audio/speech",
+        json={"model": "kokoro", "input": "hello"},
+        headers={"Authorization": "Bearer good", "x-payment": "sig", "x-payment-requirements": '{"scheme":"exact"}'},
+    )
+    assert r.status_code == 200
+    (usage,) = reported
+    assert usage.payment_payload == "sig"
+    assert usage.payment_requirements == '{"scheme":"exact"}'
+    assert usage.input_tokens == 5
