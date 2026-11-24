@@ -2,7 +2,7 @@ import asyncio
 from http import HTTPStatus
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
@@ -57,9 +57,18 @@ def _validate(body: SpeechRequest) -> AudioModelConfig:
     return model_config
 
 
-def _track_usage(token: str, model_name: str, character_count: int, background_tasks: BackgroundTasks) -> None:
+def _track_usage(
+    token: str, model_name: str, character_count: int, raw_request: Request, background_tasks: BackgroundTasks
+) -> None:
     try:
-        user_context = UserContext(key=token, model_name=model_name, endpoint="v1/audio/speech")
+        # x402 requests carry the payment to settle from this usage report.
+        user_context = UserContext(
+            key=token,
+            model_name=model_name,
+            endpoint="v1/audio/speech",
+            payment_payload=raw_request.headers.get("x-payment") or None,
+            payment_requirements=raw_request.headers.get("x-payment-requirements") or None,
+        )
         usage_data = AudioUsageFullData(
             **user_context.model_dump(),
             **AudioUsage(input_tokens=character_count).model_dump(),
@@ -72,6 +81,7 @@ def _track_usage(token: str, model_name: str, character_count: int, background_t
 @router.post("/v1/audio/speech")
 async def create_speech(
     body: SpeechRequest,
+    raw_request: Request,
     background_tasks: BackgroundTasks,
     token: Annotated[str, Depends(require_api_key)],
 ) -> Response:
@@ -94,5 +104,5 @@ async def create_speech(
     except Exception as e:
         raise HTTPException(status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail=f"TTS synthesis failed: {e!s}")
 
-    _track_usage(token, body.model, len(body.input), background_tasks)
+    _track_usage(token, body.model, len(body.input), raw_request, background_tasks)
     return Response(content=wav_bytes, media_type="audio/wav")
